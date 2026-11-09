@@ -67,6 +67,23 @@ td input[type=number]{padding:3px 4px;font-size:12px;width:52px}
 .kpi .l{font-size:11px;color:var(--muted)}
 .stats td,.stats th{text-align:right;font-family:var(--mono);font-size:11.5px}
 .stats td:first-child,.stats th:first-child{text-align:left;font-family:inherit}
+.verdict{border-radius:12px;padding:12px 14px;margin-bottom:12px;color:#fff;display:flex;gap:12px;align-items:flex-start}
+.verdict .dot{flex:none;width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.22);display:grid;place-items:center;font-size:17px;font-weight:600}
+.verdict .g{font-size:18px;font-weight:600;line-height:1.2}
+.verdict .s{font-size:12.5px;opacity:.92;margin-top:3px}
+.checks{list-style:none;padding:0;margin:12px 0 0;font-size:12.5px}
+.checks li{display:flex;gap:8px;padding:6px 0;border-top:1px solid var(--line)}
+.checks li .ic{flex:none;width:18px;text-align:center;font-weight:600}
+.checks li .ok{color:var(--ok)} .checks li .ko{color:#c0392b} .checks li .mid{color:var(--warn)}
+.zbar{display:flex;height:14px;border-radius:4px;overflow:hidden;margin-top:12px}
+.zbar div{height:100%}
+.zrow{display:grid;grid-template-columns:12px 1fr auto;gap:6px;align-items:center;font-size:12px;margin-top:4px}
+.zrow i{width:12px;height:12px;border-radius:3px;display:block}
+.tips{margin:10px 0 0;padding-left:18px;font-size:12.5px}
+.tips li{margin:3px 0}
+.note{font-size:11.5px;color:var(--muted);margin-top:10px}
+.pill{display:inline-block;padding:1px 7px;border-radius:10px;color:#fff;font-size:11px;font-family:'IBM Plex Sans',sans-serif}
+.legend .zl .zrow{font-size:11.5px}
 main{position:relative;overflow:hidden}
 #view{position:absolute;inset:0}
 .toolbar{position:absolute;top:14px;left:14px;display:flex;gap:6px;flex-wrap:wrap}
@@ -130,7 +147,7 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
       <label class="f"><span>Passo griglia <i>m</i></span><input type="number" id="spacing" value="0.5" min="0.1" step="0.1"></label>
       <label class="f"><span>Piano di lavoro <i>m</i></span><input type="number" id="height" value="0.75" min="0" step="0.05"></label>
       <label class="f"><span>Riflettanza suolo</span><input type="number" id="ground" value="0.2" min="0" max="1" step="0.05"></label>
-      <label class="f"><span>E esterno <i>lux</i></span><input type="number" id="eext" value="10000" min="100" step="500"></label>
+      <label class="f" title="Illuminamento diffuso esterno mediano (EN 17037, tab. A.3). Roma: 19.200 lx"><span>E esterna mediana <i>lux</i></span><input type="number" id="eext" value="19200" min="1000" step="100"></label>
       <label class="f"><span>Qualità</span>
         <select id="quality">
           <option value="64,4">Bozza · 64 raggi</option>
@@ -138,7 +155,13 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
           <option value="1024,8">Alta · 1024 raggi</option>
         </select>
       </label>
-      <label class="f"><span>Soglia DF <i>%</i></span><input type="number" id="thr" value="2" min="0" step="0.5"></label>
+      <label class="f"><span>Destinazione d'uso</span>
+        <select id="use">
+          <option value="2">Residenza · DF medio ≥ 2%</option>
+          <option value="2.01">Uffici · DF medio ≥ 2%</option>
+          <option value="3">Scuola (aule) · DF medio ≥ 3%</option>
+        </select>
+      </label>
     </div>
     <label class="chk"><input type="checkbox" id="indoorOnly" checked> Solo punti interni (con qualcosa sopra)</label>
     <label class="chk"><input type="checkbox" id="solidFilter" checked> Scarta i punti dentro muri e solidi</label>
@@ -153,9 +176,10 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
 
   <section id="s-results" class="disabled">
     <h2><span class="n">4</span>Risultati</h2>
+    <div id="verdict"></div>
     <div class="kpis">
       <div class="kpi"><div class="v" id="kMean">–</div><div class="l">DF medio</div></div>
-      <div class="kpi"><div class="v" id="kThr">–</div><div class="l" id="kThrL">area ≥ 2%</div></div>
+      <div class="kpi"><div class="v" id="kThr">–</div><div class="l" id="kThrL">area ≥ 300 lx</div></div>
       <div class="kpi"><div class="v" id="kLux">–</div><div class="l">lux medi</div></div>
     </div>
     <div style="margin-top:12px;overflow-x:auto"><table class="stats" id="stats"></table></div>
@@ -164,7 +188,7 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
       <button id="csvCopy">Copia CSV</button>
       <button id="png">Immagine</button>
     </div>
-    <div id="compliance" class="info"></div>
+    <div id="evalDetail"></div>
   </section>
 
   <footer>
@@ -178,14 +202,15 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
   <div class="toolbar">
     <div class="seg"><button id="v3d" class="on">3D</button><button id="vPlan">Pianta</button></div>
     <select id="level"><option value="all">Tutti i livelli</option></select>
-    <div class="seg"><button id="mDF" class="on">DF %</button><button id="mLux">lux</button></div>
+    <div class="seg"><button id="mZone" class="on">Zone</button><button id="mDF">DF %</button><button id="mLux">lux</button></div>
     <button id="ghost">Modello: pieno</button>
   </div>
   <div class="legend" id="legend">
     <div class="t"><span id="lgTitle">Daylight Factor (%)</span><span id="lgCount"></span></div>
     <div class="bar" id="lgBar"></div>
     <div class="ticks" id="lgTicks"></div>
-    <div class="rng">Scala da <input type="number" id="lgMin" value="0" step="0.5"> a <input type="number" id="lgMax" value="5" step="0.5"></div>
+    <div class="zl" id="lgZones"></div>
+    <div class="rng" id="lgRng">Scala da <input type="number" id="lgMin" value="0" step="0.5"> a <input type="number" id="lgMax" value="5" step="0.5"></div>
   </div>
   <div id="tip"></div>
 </main>

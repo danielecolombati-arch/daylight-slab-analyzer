@@ -16,7 +16,10 @@ await p.waitForFunction(() => window.__daylight.result, null, { timeout: 180000 
 await p.waitForTimeout(800);
 console.log('status:', await p.textContent('#status'));
 console.log('stats:', (await p.innerText('#stats')).replace(/\n/g,' | '));
+console.log('verdict:', await p.innerText('#verdict')); console.log('detail:', (await p.innerText('#evalDetail')).replace(/\n/g,' | '));
 await p.screenshot({ path: 'test/shot_demo.png' });
+await p.evaluate(() => document.querySelector('aside').scrollTop = 2000); await p.waitForTimeout(200);
+await p.screenshot({ path: 'test/shot_demo_eval.png' });
 await p.click('#v3d'); await p.selectOption('#level','all'); await p.waitForTimeout(500);
 await p.screenshot({ path: 'test/shot_demo3d.png' });
 // 3dm

@@ -28,6 +28,20 @@ L'app legge le **mesh di rendering** salvate nel file. Se alcune polisuperfici n
 
 Le unità del modello (mm, cm, m…) vengono lette dal file; puoi forzarle dal menu *Unità*.
 
+## Valutazione dei risultati
+
+Per ogni piano (e per l'insieme) l'app dà un **giudizio a semaforo**: Critico, Insufficiente, Sufficiente, Buono o Ottimo. Il giudizio combina:
+
+- **Requisito di legge italiano**: DF medio ≥ 2% per residenze e uffici (D.M. 5/7/1975), ≥ 3% per aule scolastiche (D.M. 18/12/1975);
+- **EN 17037, metodo 1**: livello minimo, medio o alto, calcolato su mediana (50% della superficie) e 5° percentile (95% della superficie). Le soglie dipendono dall'illuminamento esterno diffuso mediano: per Roma 19.200 lx, cioè DF 0,5% per 100 lx, 1,6% per 300 lx, 2,6% per 500 lx e 3,9% per 750 lx;
+- **Uniformità** (minimo / medio).
+
+La **mappa a zone** colora la superficie in: buio (< 100 lx), scarso, sufficiente (≥ 300 lx), buono, molto luminoso (> 750 lx). Lo stesso pannello indica la percentuale di area per ogni zona e propone suggerimenti per migliorare (finestre, profondità, lucernari, finiture chiare, schermature).
+
+> La verifica di legge va fatta locale per locale: qui il calcolo è sull'intera superficie del piano, quindi è un'indicazione.
+
+Per ridurre il rumore del calcolo Monte Carlo, i valori sono leggermente smussati (media 3×3 sulla griglia).
+
 ## Metodo di calcolo
 
 - **Cielo**: cielo coperto standard CIE, con luminanza `L(γ) = Lz·(1 + 2 sin γ)/3`. Il DF non dipende quindi da orientamento, data e ora.
