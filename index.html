@@ -84,6 +84,18 @@ td input[type=number]{padding:3px 4px;font-size:12px;width:52px}
 .note{font-size:11.5px;color:var(--muted);margin-top:10px}
 .pill{display:inline-block;padding:1px 7px;border-radius:10px;color:#fff;font-size:11px;font-family:'IBM Plex Sans',sans-serif}
 .legend .zl .zrow{font-size:11.5px}
+.drop.small{padding:10px}
+.drop.small b{font-size:13px}
+.drop a{color:var(--accent-ink)}
+.usebar{margin-top:10px}
+.usebar .top{display:flex;justify-content:space-between;font-size:12.5px;gap:8px}
+.usebar .top b{font-weight:600}
+.usebar .track{height:8px;background:#ebe7df;border-radius:4px;overflow:hidden;margin-top:4px}
+.usebar .track div{height:100%;border-radius:4px}
+.lsw{display:inline-block;width:18px;height:0;border-top:3px solid;vertical-align:middle;margin-right:6px}
+.sumhead{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.sumhead .t{font-weight:600}
+.sumhead .m{font-size:12px;color:var(--muted)}
 main{position:relative;overflow:hidden}
 #view{position:absolute;inset:0}
 .toolbar{position:absolute;top:14px;left:14px;display:flex;gap:6px;flex-wrap:wrap}
@@ -141,13 +153,37 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
     <p class="hint"><b>Solaio</b> = superfici dove misurare la luce. ρ vuoto = automatico per orientamento (pavimenti 0.2, pareti 0.5, soffitti 0.7).</p>
   </section>
 
+  <section id="s-site" class="disabled">
+    <h2><span class="n">3</span>Località e destinazione d'uso</h2>
+    <label class="f"><span>Località</span>
+      <select id="loc"></select>
+    </label>
+    <div class="drop small" id="epwDrop" style="margin-top:8px">
+      <b>Carica un file clima .epw</b>
+      <span>qualsiasi località nel mondo · <a href="https://climate.onebuilding.org/" target="_blank" rel="noopener">scaricalo gratis qui</a></span>
+      <input type="file" id="epwFile" accept=".epw" hidden>
+    </div>
+    <div class="grid2" style="margin-top:8px">
+      <label class="f" title="Illuminamento esterno diffuso mediano nelle ore di luce (EN 17037)"><span>E diffusa mediana <i>lux</i></span><input type="number" id="eext" value="19200" min="1000" step="100"></label>
+      <div id="locInfo" class="hint" style="margin:0;align-self:end"></div>
+    </div>
+    <label class="f" style="margin-top:12px"><span>Destinazione d'uso</span>
+      <select id="use">
+        <option value="res">Residenziale</option>
+        <option value="off">Uffici</option>
+        <option value="ind">Industriale / produttivo</option>
+      </select>
+    </label>
+    <table style="margin-top:8px" id="thrTable"><thead><tr><th></th><th>Linea</th><th style="text-align:right">lux</th></tr></thead><tbody id="thrRows"></tbody></table>
+    <p class="hint" id="useNote"></p>
+  </section>
+
   <section id="s-params" class="disabled">
-    <h2><span class="n">3</span>Parametri</h2>
+    <h2><span class="n">4</span>Parametri</h2>
     <div class="grid2">
       <label class="f"><span>Passo griglia <i>m</i></span><input type="number" id="spacing" value="0.5" min="0.1" step="0.1"></label>
       <label class="f"><span>Piano di lavoro <i>m</i></span><input type="number" id="height" value="0.75" min="0" step="0.05"></label>
       <label class="f"><span>Riflettanza suolo</span><input type="number" id="ground" value="0.2" min="0" max="1" step="0.05"></label>
-      <label class="f" title="Illuminamento diffuso esterno mediano (EN 17037, tab. A.3). Roma: 19.200 lx"><span>E esterna mediana <i>lux</i></span><input type="number" id="eext" value="19200" min="1000" step="100"></label>
       <label class="f"><span>Qualità</span>
         <select id="quality">
           <option value="64,4">Bozza · 64 raggi</option>
@@ -155,13 +191,7 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
           <option value="1024,8">Alta · 1024 raggi</option>
         </select>
       </label>
-      <label class="f"><span>Destinazione d'uso</span>
-        <select id="use">
-          <option value="2">Residenza · DF medio ≥ 2%</option>
-          <option value="2.01">Uffici · DF medio ≥ 2%</option>
-          <option value="3">Scuola (aule) · DF medio ≥ 3%</option>
-        </select>
-      </label>
+
     </div>
     <label class="chk"><input type="checkbox" id="indoorOnly" checked> Solo punti interni (con qualcosa sopra)</label>
     <label class="chk"><input type="checkbox" id="solidFilter" checked> Scarta i punti dentro muri e solidi</label>
@@ -175,13 +205,8 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
   </section>
 
   <section id="s-results" class="disabled">
-    <h2><span class="n">4</span>Risultati</h2>
-    <div id="verdict"></div>
-    <div class="kpis">
-      <div class="kpi"><div class="v" id="kMean">–</div><div class="l">DF medio</div></div>
-      <div class="kpi"><div class="v" id="kThr">–</div><div class="l" id="kThrL">area ≥ 300 lx</div></div>
-      <div class="kpi"><div class="v" id="kLux">–</div><div class="l">lux medi</div></div>
-    </div>
+    <h2><span class="n">5</span>Risultati</h2>
+    <div id="summary"></div>
     <div style="margin-top:12px;overflow-x:auto"><table class="stats" id="stats"></table></div>
     <div class="row">
       <button id="csv">Scarica CSV</button>
@@ -203,6 +228,7 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
     <div class="seg"><button id="v3d" class="on">3D</button><button id="vPlan">Pianta</button></div>
     <select id="level"><option value="all">Tutti i livelli</option></select>
     <div class="seg"><button id="mZone" class="on">Zone</button><button id="mDF">DF %</button><button id="mLux">lux</button></div>
+    <button id="lines" class="on-t">Linee: sì</button>
     <button id="ghost">Modello: pieno</button>
   </div>
   <div class="legend" id="legend">

@@ -3,6 +3,11 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Rhino3dmLoader } from 'three/addons/loaders/3DMLoader.js';
 import { makeSensorGrid, MAT_OPAQUE, MAT_GLASS } from './engine.js';
 import { makeDemo } from './demo.js';
+import { EN17037_CAPITALS, parseEPW } from './climate.js';
+import { contourSegments } from './contour.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 const $ = (id) => document.getElementById(id);
 const ROLES = { slab: 'Solaio', opaque: 'Opaco', glass: 'Vetro', ignore: 'Ignora' };
@@ -24,6 +29,7 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0xb9b3a8, 2.2));
 const dir = new THREE.DirectionalLight(0xffffff, 1.3); dir.position.set(-30, -50, 80); scene.add(dir);
 const modelGroup = new THREE.Group(); scene.add(modelGroup);
 const resultGroup = new THREE.Group(); scene.add(resultGroup);
+const contourGroup = new THREE.Group(); scene.add(contourGroup);
 const clipPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 1e9);
 
 function resize() {
@@ -31,6 +37,7 @@ function resize() {
   renderer.setSize(r.width, r.height, false);
   renderer.domElement.style.width = '100%'; renderer.domElement.style.height = '100%';
   camera.aspect = r.width / Math.max(1, r.height); camera.updateProjectionMatrix();
+  contourGroup.children.forEach((l) => l.material.resolution.set(r.width, r.height));
 }
 new ResizeObserver(resize).observe(view); resize();
 (function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
@@ -145,7 +152,7 @@ function setModel(raw, autoScale) {
   if (Math.max(sz.x, sz.y, sz.z) > 2000) info += `<div class="warn">Il modello sembra enorme: controlla le unità (menu "Unità").</div>`;
   $('modelInfo').innerHTML = info;
   $('empty').style.display = tris ? 'none' : '';
-  for (const s of ['s-layers', 's-params', 's-run']) $(s).classList.toggle('disabled', !tris);
+  for (const s of ['s-layers', 's-site', 's-params', 's-run']) $(s).classList.toggle('disabled', !tris);
   $('s-results').classList.add('disabled');
   updateEstimate();
   setStatus('pronto');
@@ -386,7 +393,7 @@ async function run() {
       }
     }));
     if (!running) return;
-    result = { sensors: S, df, spacing: o.spacing, eext: o.eext, ref: parseFloat($('use').value) || 2, outdoor, solid, opts: o };
+    result = { sensors: S, df, spacing: o.spacing, eext: o.eext, outdoor, solid, opts: o };
     result.levels = makeLevels(S);
     result.raw = df; result.df = smooth(S, df, o.spacing);
     const secs = (performance.now() - t0) / 1000;
@@ -460,6 +467,7 @@ function makeLevels(S) {
 let cells = null;
 function clearResults() {
   disposeGroup(resultGroup); cells = null;
+  for (const c of [...contourGroup.children]) { c.geometry.dispose(); c.material.dispose(); contourGroup.remove(c); }
   $('legend').style.display = 'none';
   $('level').innerHTML = '<option value="all">Tutti i livelli</option>';
   clipPlane.constant = 1e9;
@@ -486,7 +494,6 @@ function showResults() {
   $('legend').style.display = 'block';
   $('s-results').classList.remove('disabled');
   applyLevel();
-  renderStats();
   setSeg('vPlan', 'v3d'); fitCamera('plan');
 }
 
@@ -497,8 +504,7 @@ function syncLegendRange() {
   $('lgMin').step = $('lgMax').step = displayMode === 'lux' ? 50 : 0.5;
 }
 $('lgMin').onchange = $('lgMax').onchange = () => recolor();
-$('use').onchange = () => { if (result) { result.ref = parseFloat($('use').value) || 2; renderStats(); } };
-$('eext').onchange = () => { if (result) { result.eext = parseFloat($('eext').value) || 19200; syncLegendRange(); recolor(); renderStats(); } };
+
 
 function currentLevel() {
   const v = $('level').value;
@@ -518,6 +524,7 @@ function applyLevel() {
   result.visible = vis;
   recolor();
   renderStats();
+  buildContours();
 }
 
 function recolor() {
@@ -527,10 +534,10 @@ function recolor() {
   $('lgZones').style.display = zoneMode ? '' : 'none';
   $('lgRng').style.display = $('lgBar').style.display = $('lgTicks').style.display = zoneMode ? 'none' : '';
   if (zoneMode) {
-    const th = thresholds();
-    for (let i = 0; i < result.sensors.count; i++) cells.setColorAt(i, c.set(ZONES[zoneOf(result.df[i], th)].color));
+    const bands = useBands();
+    for (let i = 0; i < result.sensors.count; i++) cells.setColorAt(i, c.set(bands[bandOf(result.df[i], bands)].fill));
     cells.instanceColor.needsUpdate = true;
-    $('lgTitle').textContent = 'Zone di luce naturale (EN 17037)';
+    $('lgTitle').textContent = `Zone per uso · ${USES[useKey].name}`;
     renderZoneLegend();
     return;
   }
@@ -559,117 +566,229 @@ function colormap(t, out) {
   return out.setRGB(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f, THREE.SRGBColorSpace);
 }
 
-// ------------------------------------------------------------------ evaluation
-// Zones by illuminance exceeded for 50% of daylight hours (EN 17037 method 1)
-const ZONES = [
-  { key: 'buio', label: 'Buio', desc: '< 100 lx · serve quasi sempre luce artificiale', color: '#3b2a63' },
-  { key: 'scarso', label: 'Scarso', desc: '100–300 lx · ok per passaggio, poco per leggere', color: '#d8743a' },
-  { key: 'suff', label: 'Sufficiente', desc: '300–500 lx · si legge e si lavora', color: '#e8c547' },
-  { key: 'buono', label: 'Buono', desc: '500–750 lx · ben illuminato', color: '#8cc265' },
-  { key: 'ottimo', label: 'Molto luminoso', desc: '> 750 lx · molto luminoso', color: '#2e9b72' },
-];
-const GRADES = {
-  critico: { label: 'Critico', color: '#a8322d', icon: '!' },
-  insuff: { label: 'Insufficiente', color: '#d0662b', icon: '✗' },
-  suff: { label: 'Sufficiente', color: '#b99412', icon: '~' },
-  buono: { label: 'Buono', color: '#5b9b3c', icon: '✓' },
-  ottimo: { label: 'Ottimo', color: '#24835e', icon: '★' },
+// ------------------------------------------------------------------ site & use
+const USES = {
+  res: {
+    name: 'Residenziale', height: 0.85, rest: 'bagni, ripostigli, corridoi, scale e cavedi',
+    note: 'Soglie per le abitazioni dell\'Annesso nazionale UK alla EN 17037 (BRE 209:2022). Una stanza va bene se almeno metà della sua superficie è dentro la sua linea.',
+    lines: [
+      { lux: 100, label: 'Camera da letto', color: '#2f6fb0' },
+      { lux: 150, label: 'Soggiorno', color: '#d07a1f' },
+      { lux: 200, label: 'Cucina / living con cucina', color: '#b8336a' },
+    ],
+  },
+  off: {
+    name: 'Uffici', height: 0.75, rest: 'core, bagni, archivi, locali tecnici e depositi',
+    note: 'Livelli EN 17037: un ambiente li raggiunge se almeno metà della sua superficie è dentro la linea.',
+    lines: [
+      { lux: 300, label: 'Ufficio (EN 17037 minimo)', color: '#d07a1f' },
+      { lux: 500, label: 'Lavoro continuo a scrivania (EN 17037 medio)', color: '#b8336a' },
+    ],
+  },
+  ind: {
+    name: 'Industriale', height: 0.85, rest: 'magazzino, depositi, impianti e servizi',
+    note: 'Livelli EN 17037 applicati alle aree di lavoro: un\'area li raggiunge se almeno metà della sua superficie è dentro la linea.',
+    lines: [
+      { lux: 300, label: 'Lavorazioni (EN 17037 minimo)', color: '#d07a1f' },
+      { lux: 500, label: 'Lavorazioni fini (EN 17037 medio)', color: '#b8336a' },
+      { lux: 750, label: 'Controllo qualità (EN 17037 alto)', color: '#5b2a86' },
+    ],
+  },
 };
-function thresholds() {
-  const E = result.eext;
-  return { d100: 100 / E * 100, d300: 300 / E * 100, d500: 500 / E * 100, d750: 750 / E * 100 };
-}
-function zoneOf(v, th) { return v < th.d100 ? 0 : v < th.d300 ? 1 : v < th.d500 ? 2 : v < th.d750 ? 3 : 4; }
-function pct(sorted, p) { return sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))))]; }
+let useKey = 'res';
+let useLines = USES.res.lines.map((l) => ({ ...l, on: true }));
+let showLines = true;
+let site = { label: 'Roma, Italia', country: 'Italia', E: 19200, source: 'EN 17037, tab. A.3' };
 
-function evaluate(idx) {
-  const { df, spacing, eext, ref } = result;
-  if (!idx.length) return null;
-  const th = thresholds();
-  const v = Float32Array.from(idx, (k) => df[k]).sort();
-  const n = v.length;
-  const mean = v.reduce((s, x) => s + x, 0) / n;
-  const med = pct(v, 0.5), p5 = pct(v, 0.05);
-  const zones = [0, 0, 0, 0, 0];
-  for (const x of v) zones[zoneOf(x, th)]++;
-  const zf = zones.map((z) => z / n);
-  const en = med >= th.d750 && p5 >= th.d500 ? 3 : med >= th.d500 && p5 >= th.d300 ? 2 : med >= th.d300 && p5 >= th.d100 ? 1 : 0;
-  const nat = mean >= ref;
-  let grade;
-  if (med < th.d100 || mean < ref / 2) grade = 'critico';
-  else if (!nat || en === 0) grade = 'insuff';
-  else grade = en === 1 ? 'suff' : en === 2 ? 'buono' : 'ottimo';
-  return { n, area: n * spacing * spacing, mean, med, p5, min: v[0], max: v[n - 1], uni: mean > 0 ? pct(v, 0.01) / mean : 0,
-    zf, en, nat, grade, th, lux: mean / 100 * eext, luxMed: med / 100 * eext };
-}
-
-const EN_LABEL = ['non raggiunto', 'minimo', 'medio', 'alto'];
-function renderStats() {
-  if (!result) return;
-  const lv = currentLevel();
-  const all = Array.from({ length: result.sensors.count }, (_, i) => i);
-  const ev = evaluate(lv ? lv.idx : all);
-  const th = ev.th, G = GRADES[ev.grade];
-  const where = lv ? `Livello ${fmtZ(lv.z)}` : (result.levels.length > 1 ? 'Tutti i livelli' : 'Solaio analizzato');
-  const lit = ev.zf[2] + ev.zf[3] + ev.zf[4], dark = ev.zf[0];
-  $('verdict').innerHTML = `<div class="verdict" style="background:${G.color}"><div class="dot">${G.icon}</div><div>
-    <div class="g">${G.label}</div><div class="s">${where} · ${verdictSentence(ev)}</div></div></div>`;
-  $('kMean').textContent = fmtNum(ev.mean, 2) + '%';
-  $('kThr').textContent = Math.round(lit * 100) + '%';
-  $('kThrL').textContent = 'area con ≥ 300 lx';
-  $('kLux').textContent = fmtInt(ev.luxMed);
-  document.querySelector('#kLux + .l').textContent = 'lux (mediana)';
-  $('lgCount').textContent = `${fmtInt(ev.n)} punti · ${fmtNum(ev.area, 0)} m²`;
-
-  const ck = (ok, txt) => `<li><span class="ic ${ok === true ? 'ok' : ok === false ? 'ko' : 'mid'}">${ok === true ? '✓' : ok === false ? '✗' : '!'}</span><span>${txt}</span></li>`;
-  const useName = $('use').selectedOptions[0].textContent.split('·')[0].trim();
-  const checks = [
-    ck(ev.nat, `<b>DF medio ${fmtNum(ev.mean, 2)}%</b> ${ev.nat ? '≥' : '<'} ${fmtNum(result.ref, 0)}% richiesto per ${useName.toLowerCase()} (${result.ref >= 3 ? 'D.M. 18/12/1975' : 'D.M. 5/7/1975'}).`),
-    ck(ev.en > 0, `<b>EN 17037: livello ${EN_LABEL[ev.en]}</b>. Metà della superficie riceve almeno ${fmtInt(ev.luxMed)} lx (mediana DF ${fmtNum(ev.med, 2)}%, obiettivo ≥ ${fmtNum(th.d300, 1)}%), il 95% almeno ${fmtInt(ev.p5 / 100 * result.eext)} lx (DF ${fmtNum(ev.p5, 2)}%, obiettivo ≥ ${fmtNum(th.d100, 1)}%).`),
-    ck(ev.uni >= 0.3 ? true : ev.uni >= 0.15 ? null : false, `<b>Uniformità ${fmtNum(ev.uni, 2)}</b> (min/medio). ${ev.uni >= 0.3 ? 'Luce ben distribuita.' : ev.uni >= 0.15 ? 'Forte differenza tra zone vicine e lontane dalle finestre.' : 'Luce molto concentrata: alcune zone sono quasi al buio.'}`),
-  ];
-  const zbar = ZONES.map((z, i) => `<div style="width:${ev.zf[i] * 100}%;background:${z.color}" title="${z.label} ${Math.round(ev.zf[i] * 100)}%"></div>`).join('');
-  const zrows = ZONES.map((z, i) => `<div class="zrow"><i style="background:${z.color}"></i><span><b>${z.label}</b> <span style="color:var(--muted)">${z.desc}</span></span><span style="font-family:var(--mono)">${Math.round(ev.zf[i] * 100)}%</span></div>`).reverse().join('');
-  const tips = suggestions(ev);
-  $('evalDetail').innerHTML = `<div class="zbar">${zbar}</div>${zrows}<ul class="checks">${checks.join('')}</ul>` +
-    (tips.length ? `<div style="margin-top:12px;font-weight:600;font-size:12.5px">Cosa si può migliorare</div><ul class="tips">${tips.map((t) => `<li>${t}</li>`).join('')}</ul>` : '') +
-    `<p class="note">Soglie EN 17037 per E esterna mediana ${fmtInt(result.eext)} lx (Roma: 19.200 lx). Le verifiche di legge vanno fatte locale per locale: qui il calcolo è sull'intera superficie del piano, quindi è un'indicazione.</p>`;
-
-  const rows = result.levels.map((l) => [`Livello ${fmtZ(l.z)}`, evaluate(l.idx)]);
-  if (rows.length > 1) rows.push(['Totale', evaluate(all)]);
-  $('stats').innerHTML = `<tr><th></th><th>m²</th><th>DF medio</th><th>DF min</th><th>≥300 lx</th><th>giudizio</th></tr>` +
-    rows.map(([nm, e]) => `<tr><td>${nm}</td><td>${fmtNum(e.area, 0)}</td><td>${fmtNum(e.mean, 2)}</td><td>${fmtNum(e.min, 2)}</td><td>${Math.round((e.zf[2] + e.zf[3] + e.zf[4]) * 100)}%</td><td><span class="pill" style="background:${GRADES[e.grade].color}">${GRADES[e.grade].label}</span></td></tr>`).join('');
+function initSite() {
+  const sel = $('loc');
+  const caps = [...EN17037_CAPITALS].sort((a, b) => a.city.localeCompare(b.city, 'it'));
+  sel.innerHTML = `<optgroup label="Valori EN 17037 (capitali europee)">${caps.map((c) => `<option value="cap:${c.city}">${c.city}, ${c.country} · ${fmtInt(c.E)} lx</option>`).join('')}</optgroup>
+    <optgroup label="Altro"><option value="epw" disabled>Da file EPW (caricalo sotto)</option><option value="manual">Valore inserito a mano</option></optgroup>`;
+  sel.value = 'cap:Roma';
+  sel.onchange = () => {
+    const v = sel.value;
+    if (v.startsWith('cap:')) {
+      const c = EN17037_CAPITALS.find((x) => x.city === v.slice(4));
+      setSite({ label: `${c.city}, ${c.country}`, country: c.country, E: c.E, source: 'EN 17037, tab. A.3' });
+    } else if (v === 'manual') setSite({ ...site, label: 'Valore manuale', country: '', source: 'manuale' });
+  };
+  const drop = $('epwDrop'), input = $('epwFile');
+  drop.onclick = (e) => { if (e.target.tagName !== 'A') input.click(); };
+  input.onchange = () => input.files[0] && loadEPW(input.files[0]);
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) loadEPW(f); };
+  $('eext').onchange = () => {
+    const E = parseFloat($('eext').value);
+    if (!(E > 0)) return;
+    sel.value = 'manual';
+    setSite({ label: 'Valore manuale', country: site.country, E, source: 'manuale' });
+  };
+  $('use').onchange = () => setUse($('use').value);
+  $('lines').onclick = () => { showLines = !showLines; $('lines').textContent = 'Linee: ' + (showLines ? 'sì' : 'no'); buildContours(); };
+  setUse('res'); setSite(site);
 }
 
-function verdictSentence(ev) {
-  const lit = Math.round((ev.zf[2] + ev.zf[3] + ev.zf[4]) * 100), dark = Math.round(ev.zf[0] * 100);
-  switch (ev.grade) {
-    case 'critico': return `Poca luce naturale: solo il ${lit}% della superficie arriva a 300 lx e il ${dark}% resta sotto i 100 lx. Servirà luce artificiale quasi sempre.`;
-    case 'insuff': return `Luce naturale non sufficiente: il ${lit}% della superficie è ben illuminato, ma ${!ev.nat ? 'il DF medio è sotto il minimo di legge' : 'le zone lontane dalle finestre restano troppo buie'}.`;
-    case 'suff': return `Luce sufficiente: il ${lit}% della superficie supera i 300 lx per metà delle ore di luce. Requisiti minimi rispettati.`;
-    case 'buono': return `Buona luce naturale: il ${lit}% della superficie supera i 300 lx e quasi tutto il piano supera i 100 lx.`;
-    default: return `Luce naturale abbondante su quasi tutta la superficie. Verifica abbagliamento e surriscaldamento estivo.`;
+async function loadEPW(file) {
+  try {
+    const r = parseEPW(await file.text());
+    const opt = $('loc').querySelector('option[value="epw"]');
+    opt.disabled = false; opt.textContent = `${r.city}, ${r.country} (EPW) · ${fmtInt(r.E)} lx`;
+    $('loc').value = 'epw';
+    setSite({ label: `${r.city}, ${r.country}`, country: r.country, E: r.E,
+      source: `EPW · ${fmtNum(Math.abs(r.lat), 1)}°${r.lat >= 0 ? 'N' : 'S'} ${fmtNum(Math.abs(r.lon), 1)}°${r.lon >= 0 ? 'E' : 'W'} · ${fmtInt(r.hours)} ore di luce · da ${r.source}` });
+  } catch (err) {
+    $('locInfo').innerHTML = `<span style="color:var(--warn)">${escapeHtml(err.message)}</span>`;
   }
 }
 
-function suggestions(ev) {
+function setSite(s) {
+  site = s;
+  $('eext').value = s.E;
+  $('locInfo').textContent = s.source;
+  if (result) { result.eext = s.E; refreshResults(); }
+}
+
+function setUse(key) {
+  useKey = key;
+  const U = USES[key];
+  useLines = U.lines.map((l) => ({ ...l, on: true }));
+  $('use').value = key;
+  $('height').value = U.height;
+  $('useNote').textContent = U.note;
+  renderThrTable();
+  if (result) refreshResults();
+}
+
+function renderThrTable() {
+  const tb = $('thrRows'); tb.innerHTML = '';
+  useLines.forEach((l) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td style="width:22px"><input type="checkbox" ${l.on ? 'checked' : ''} style="accent-color:${l.color}"></td>
+      <td><span class="lsw" style="border-color:${l.color}"></span>${escapeHtml(l.label)}</td>
+      <td style="text-align:right"><input type="number" min="10" step="10" value="${l.lux}"></td>`;
+    const [cb, inp] = tr.querySelectorAll('input');
+    cb.onchange = () => { l.on = cb.checked; if (result) refreshResults(); };
+    inp.onchange = () => { l.lux = Math.max(1, parseFloat(inp.value) || l.lux); if (result) refreshResults(); };
+    tb.appendChild(tr);
+  });
+}
+
+function refreshResults() { recolor(); renderStats(); buildContours(); }
+
+function activeLines() { return useLines.filter((l) => l.on).sort((a, b) => a.lux - b.lux); }
+const dfOf = (lux) => lux / result.eext * 100;
+
+// Bands between consecutive thresholds, for the zone map
+function useBands() {
+  const L = activeLines(), U = USES[useKey];
+  const bands = [{ min: -Infinity, fill: '#cfcac1', label: `Sotto ${L.length ? fmtInt(L[0].lux) : '–'} lx`, desc: U.rest, short: 'servizi / core' }];
+  L.forEach((l, i) => {
+    const fits = L.slice(0, i + 1).map((x) => x.label.split(' (')[0].toLowerCase());
+    bands.push({ min: dfOf(l.lux), fill: mix(l.color, 0.45), label: `≥ ${fmtInt(l.lux)} lx`, desc: 'adatto a ' + fits.reverse().join(', '), short: l.label.split(' (')[0] });
+  });
+  return bands;
+}
+function bandOf(v, bands) { let k = 0; for (let i = 1; i < bands.length; i++) if (v >= bands[i].min) k = i; return k; }
+function mix(hex, t) { const c = new THREE.Color(hex); c.lerp(new THREE.Color(0xffffff), t); return '#' + c.getHexString(); }
+
+function areaStats(idx) {
+  const { df, spacing } = result;
+  const n = idx.length; if (!n) return null;
+  const v = Float32Array.from(idx, (k) => df[k]).sort();
+  const mean = v.reduce((s, x) => s + x, 0) / n;
+  const pct = (p) => v[Math.min(n - 1, Math.max(0, Math.floor(p * (n - 1))))];
+  const frac = (dfT) => { let lo = 0, hi = n; while (lo < hi) { const m = (lo + hi) >> 1; if (v[m] < dfT) lo = m + 1; else hi = m; } return (n - lo) / n; };
+  return { n, area: n * spacing * spacing, mean, med: pct(0.5), p5: pct(0.05), frac };
+}
+
+function renderStats() {
+  if (!result) return;
+  const lv = currentLevel(), U = USES[useKey], L = activeLines();
+  const all = Array.from({ length: result.sensors.count }, (_, i) => i);
+  const st = areaStats(lv ? lv.idx : all);
+  const where = lv ? `Livello ${fmtZ(lv.z)}` : (result.levels.length > 1 ? 'Tutti i livelli' : 'Solaio analizzato');
+  let html = `<div class="sumhead"><div class="t">${where} · ${U.name}</div><div class="m">${fmtNum(st.area, 0)} m² analizzati · ${escapeHtml(site.label)} · E diffusa mediana ${fmtInt(result.eext)} lx</div></div>`;
+  for (const l of [...L].reverse()) {
+    const f = st.frac(dfOf(l.lux));
+    html += `<div class="usebar"><div class="top"><span><span class="lsw" style="border-color:${l.color}"></span><b>${escapeHtml(l.label.split(' (')[0])}</b> · ≥ ${fmtInt(l.lux)} lx</span><span style="font-family:var(--mono)">${fmtNum(f * st.area, 0)} m² · ${Math.round(f * 100)}%</span></div>
+      <div class="track"><div style="width:${f * 100}%;background:${l.color}"></div></div></div>`;
+  }
+  if (L.length) {
+    const below = 1 - st.frac(dfOf(L[0].lux));
+    html += `<div class="usebar"><div class="top"><span><span class="lsw" style="border-color:#bdb7ad"></span><b>Sotto ${fmtInt(L[0].lux)} lx</b> · ${U.rest}</span><span style="font-family:var(--mono)">${fmtNum(below * st.area, 0)} m² · ${Math.round(below * 100)}%</span></div>
+      <div class="track"><div style="width:${below * 100}%;background:#bdb7ad"></div></div></div>`;
+  }
+  html += `<p class="hint" style="margin-top:10px">Le linee sulla mappa racchiudono le zone che ricevono almeno quei lux per metà delle ore di luce dell'anno. Disegna le stanze in modo che almeno metà della loro superficie stia dentro la linea giusta; le zone fuori dalle linee sono adatte a ${U.rest}.</p>`;
+
+  // informative checks
+  const th = { d100: dfOf(100), d300: dfOf(300), d500: dfOf(500), d750: dfOf(750) };
+  const en = st.med >= th.d750 && st.p5 >= th.d500 ? 'alto' : st.med >= th.d500 && st.p5 >= th.d300 ? 'medio' : st.med >= th.d300 && st.p5 >= th.d100 ? 'minimo' : null;
+  const checks = [`<li><span class="ic mid">i</span><span><b>DF medio ${fmtNum(st.mean, 2)}%</b> · DF mediano ${fmtNum(st.med, 2)}% (≈ ${fmtInt(st.med / 100 * result.eext)} lx su metà della superficie)</span></li>`,
+    `<li><span class="ic ${en ? 'ok' : 'mid'}">${en ? '✓' : 'i'}</span><span><b>EN 17037 sull'intero ${lv ? 'piano' : 'edificio'}:</b> ${en ? 'livello ' + en : 'livello minimo non raggiunto sull\'intera superficie'} (soglie a ${escapeHtml(site.label)}: 300 lx = DF ${fmtNum(th.d300, 1)}%, 100 lx = DF ${fmtNum(th.d100, 1)}%).</span></li>`];
+  if (/^(ita|italia|italy)$/i.test(site.country) && useKey !== 'ind')
+    checks.push(`<li><span class="ic mid">i</span><span><b>Italia, D.M. 5/7/1975:</b> DF medio ≥ 2% per ogni locale abitabile${useKey === 'off' ? ' (spesso ripreso dai regolamenti edilizi per gli uffici)' : ''}. Da verificare stanza per stanza; sul piano intero il DF medio è ${fmtNum(st.mean, 2)}%.</span></li>`);
+  html += `<ul class="checks">${checks.join('')}</ul>`;
+  const tips = suggestions(st, L);
+  if (tips.length) html += `<div style="margin-top:12px;font-weight:600;font-size:12.5px">Per allargare l'area utile</div><ul class="tips">${tips.map((t) => `<li>${t}</li>`).join('')}</ul>`;
+  $('summary').innerHTML = html;
+  $('lgCount').textContent = `${fmtInt(st.n)} punti · ${fmtNum(st.area, 0)} m²`;
+
+  const rows = result.levels.map((l) => [`Livello ${fmtZ(l.z)}`, areaStats(l.idx)]);
+  if (rows.length > 1) rows.push(['Totale', areaStats(all)]);
+  $('stats').innerHTML = `<tr><th></th><th>m²</th><th>DF med.</th>${L.map((l) => `<th title="${escapeHtml(l.label)}"><span class="lsw" style="border-color:${l.color};width:10px"></span>≥${fmtInt(l.lux)}</th>`).join('')}</tr>` +
+    rows.map(([nm, e]) => `<tr><td>${nm}</td><td>${fmtNum(e.area, 0)}</td><td>${fmtNum(e.mean, 2)}</td>${L.map((l) => `<td>${Math.round(e.frac(dfOf(l.lux)) * 100)}%</td>`).join('')}</tr>`).join('');
+  if (displayMode === 'zone') renderZoneLegend();
+}
+
+function suggestions(st, L) {
   const t = [];
-  if (ev.grade === 'ottimo' || ev.zf[4] > 0.35) t.push('Molte zone sono molto luminose: valuta schermature regolabili (frangisole, tende) contro abbagliamento e surriscaldamento.');
-  if (ev.grade === 'ottimo' || ev.grade === 'buono') return t;
-  if (ev.uni < 0.2) t.push('La luce si ferma vicino alle finestre: alza l\'architrave o porta le finestre fino al soffitto (la luce entra più in profondità), oppure riduci la profondità degli ambienti (regola pratica: ≤ 2,5 volte l\'altezza della finestra).');
-  if (ev.zf[0] > 0.2) t.push('Per le zone buie lontane dalle facciate: lucernari, pozzi di luce o tubi solari all\'ultimo piano; partizioni vetrate o sopraluce verso gli ambienti illuminati.');
-  if (ev.med < ev.th.d300) t.push('Aumenta la superficie vetrata (indicativamente oltre 1/8 della superficie del pavimento) o usa vetri con trasmittanza luminosa più alta (τ 0,70–0,80).');
-  t.push('Riduci le ostruzioni davanti alle finestre (balconi profondi, aggetti, imbotti spesse) o svasa gli imbotti.');
-  t.push('Usa finiture interne chiare: soffitto bianco (ρ ≈ 0,8) e pareti chiare aumentano la luce riflessa in profondità. Puoi provarlo cambiando ρ nella tabella dei layer.');
+  if (st.frac(dfOf(750)) > 0.35) t.push('Molte zone superano i 750 lx: prevedi schermature regolabili contro abbagliamento e surriscaldamento.');
+  if (!L.length || st.frac(dfOf(L[L.length - 1].lux)) >= 0.6) return t;
+  t.push('Per portare la luce più in profondità, alza l\'architrave o porta le finestre fino al soffitto (regola pratica: profondità utile ≈ 2–2,5 volte l\'altezza della finestra).');
+  t.push('Le zone lontane dalle facciate possono ospitare i servizi; all\'ultimo piano lucernari o pozzi di luce le rendono utilizzabili.');
+  t.push('Riduci aggetti e balconi profondi davanti alle finestre principali e usa finiture interne chiare. Puoi provarlo cambiando ρ nella tabella dei layer.');
   return t;
 }
 
 function renderZoneLegend() {
   const lv = currentLevel();
   const all = Array.from({ length: result.sensors.count }, (_, i) => i);
-  const ev = evaluate(lv ? lv.idx : all);
-  $('lgZones').innerHTML = ZONES.map((z, i) => `<div class="zrow"><i style="background:${z.color}"></i><span>${z.label} <span style="color:var(--muted)">${z.desc.split('·')[0]}</span></span><span style="font-family:var(--mono)">${Math.round(ev.zf[i] * 100)}%</span></div>`).reverse().join('');
+  const st = areaStats(lv ? lv.idx : all), bands = useBands();
+  const fr = bands.map((b, i) => (i + 1 < bands.length ? st.frac(b.min) - st.frac(bands[i + 1].min) : st.frac(b.min)));
+  fr[0] = 1 - (bands.length > 1 ? st.frac(bands[1].min) : 0);
+  $('lgZones').innerHTML = bands.map((b, i) => `<div class="zrow"><i style="background:${b.fill}"></i><span><b>${b.label}</b> <span style="color:var(--muted)">${b.desc}</span></span><span style="font-family:var(--mono)">${Math.round(fr[i] * 100)}%</span></div>`).reverse().join('')
+    + (showLines ? activeLines().map((l) => `<div class="zrow"><i style="background:none;border-top:3px solid ${l.color};height:0;margin-top:5px"></i><span>linea ${fmtInt(l.lux)} lx · ${escapeHtml(l.label.split(' (')[0])}</span><span></span></div>`).reverse().join('') : '');
 }
+
+// iso-lines per level
+function buildContours() {
+  for (const c of [...contourGroup.children]) { c.geometry.dispose(); c.material.dispose(); contourGroup.remove(c); }
+  if (!result || !showLines) return;
+  const S = result.sensors, h = result.spacing, lv = currentLevel();
+  const levels = lv ? [lv] : result.levels;
+  const r = renderer.domElement.getBoundingClientRect();
+  for (const L of activeLines()) {
+    const pos = [];
+    for (const level of levels) {
+      const pts = { gi: [], gj: [], v: [] };
+      let zsum = 0;
+      for (const k of level.idx) { pts.gi.push(Math.round(S.x[k] / h - 0.5)); pts.gj.push(Math.round(S.y[k] / h - 0.5)); pts.v.push(result.df[k]); zsum += S.zs[k]; }
+      const z = zsum / level.idx.length + 0.07;
+      const seg = contourSegments(pts, h, dfOf(L.lux));
+      for (let i = 0; i < seg.length; i += 4) pos.push(seg[i], seg[i + 1], z, seg[i + 2], seg[i + 3], z);
+    }
+    if (!pos.length) continue;
+    const g = new LineSegmentsGeometry(); g.setPositions(pos);
+    const m = new LineMaterial({ color: L.color, linewidth: 3.5, worldUnits: false });
+    m.resolution.set(r.width, r.height);
+    const line = new LineSegments2(g, m); line.renderOrder = 2;
+    contourGroup.add(line);
+  }
+}
+
+initSite();
 
 // hover tooltip
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), tip = $('tip');
@@ -681,7 +800,8 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   const hit = ray.intersectObject(cells)[0];
   if (hit && hit.instanceId != null && result.visible[hit.instanceId]) {
     const v = result.df[hit.instanceId];
-    tip.textContent = `DF ${fmtNum(v, 2)}%  ·  ${fmtInt(v / 100 * result.eext)} lx`;
+    const bands = useBands(), b = bands[bandOf(v, bands)];
+    tip.textContent = `DF ${fmtNum(v, 2)}%  ·  ${fmtInt(v / 100 * result.eext)} lx  ·  ${b.short}`;
     tip.style.left = (e.clientX - r.left) + 'px'; tip.style.top = (e.clientY - r.top) + 'px'; tip.style.display = 'block';
   } else tip.style.display = 'none';
 });
@@ -689,11 +809,11 @@ renderer.domElement.addEventListener('pointerleave', () => (tip.style.display = 
 
 // ------------------------------------------------------------------ export
 function csvText() {
-  const S = result.sensors, th = thresholds(), lines = ['x_m,y_m,z_lavoro_m,z_solaio_m,livello,DF_pct,lux,zona'];
+  const S = result.sensors, bands = useBands(), lines = ['x_m,y_m,z_lavoro_m,z_solaio_m,livello,DF_pct,lux,zona'];
   const lvOf = new Int32Array(S.count);
   result.levels.forEach((l, i) => l.idx.forEach((k) => (lvOf[k] = i)));
   for (let i = 0; i < S.count; i++)
-    lines.push([S.x[i].toFixed(3), S.y[i].toFixed(3), S.z[i].toFixed(3), S.zs[i].toFixed(3), fmtZ(result.levels[lvOf[i]].z), result.df[i].toFixed(3), Math.round(result.df[i] / 100 * result.eext), ZONES[zoneOf(result.df[i], th)].label].join(','));
+    lines.push([S.x[i].toFixed(3), S.y[i].toFixed(3), S.z[i].toFixed(3), S.zs[i].toFixed(3), fmtZ(result.levels[lvOf[i]].z), result.df[i].toFixed(3), Math.round(result.df[i] / 100 * result.eext), '"' + bands[bandOf(result.df[i], bands)].short + '"'].join(','));
   return lines.join('\n');
 }
 function download(name, blob) {
@@ -723,4 +843,4 @@ function fmtDur(s) { return s < 60 ? Math.round(s) + ' s' : Math.floor(s / 60) +
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 // expose for automated tests
-window.__daylight = { evaluate: (i) => evaluate(i), run, loadFile, get result() { return result; }, get model() { return model; }, setModel, makeDemo };
+window.__daylight = { setUse, loadEPW, run, loadFile, get result() { return result; }, get model() { return model; }, setModel, makeDemo };

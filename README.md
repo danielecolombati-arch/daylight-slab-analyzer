@@ -28,17 +28,29 @@ L'app legge le **mesh di rendering** salvate nel file. Se alcune polisuperfici n
 
 Le unità del modello (mm, cm, m…) vengono lette dal file; puoi forzarle dal menu *Unità*.
 
-## Valutazione dei risultati
+## Località
 
-Per ogni piano (e per l'insieme) l'app dà un **giudizio a semaforo**: Critico, Insufficiente, Sufficiente, Buono o Ottimo. Il giudizio combina:
+Il Daylight Factor non dipende dalla località: è un rapporto calcolato con cielo coperto standard. Dalla località dipende invece **quanti lux corrispondono a un dato DF**, attraverso l'illuminamento esterno diffuso mediano nelle ore di luce (*E<sub>v,d,med</sub>*, EN 17037). Per questo la località sposta le soglie e le linee.
 
-- **Requisito di legge italiano**: DF medio ≥ 2% per residenze e uffici (D.M. 5/7/1975), ≥ 3% per aule scolastiche (D.M. 18/12/1975);
-- **EN 17037, metodo 1**: livello minimo, medio o alto, calcolato su mediana (50% della superficie) e 5° percentile (95% della superficie). Le soglie dipendono dall'illuminamento esterno diffuso mediano: per Roma 19.200 lx, cioè DF 0,5% per 100 lx, 1,6% per 300 lx, 2,6% per 500 lx e 3,9% per 750 lx;
-- **Uniformità** (minimo / medio).
+Ci sono tre modi per indicarla:
 
-La **mappa a zone** colora la superficie in: buio (< 100 lx), scarso, sufficiente (≥ 300 lx), buono, molto luminoso (> 750 lx). Lo stesso pannello indica la percentuale di area per ogni zona e propone suggerimenti per migliorare (finestre, profondità, lucernari, finiture chiare, schermature).
+- **File clima `.epw`** di qualsiasi luogo al mondo (gratis su [climate.onebuilding.org](https://climate.onebuilding.org/)). L'app calcola la mediana dell'illuminamento diffuso orizzontale nelle ore con il sole sopra l'orizzonte. Se il file non contiene dati di illuminamento, li stima dalla radiazione diffusa con un'efficacia di 120 lm/W;
+- **33 capitali europee** con i valori ufficiali della EN 17037, tab. A.3 (es. Roma 19.200 lx, Londra 14.100 lx, Oslo 12.400 lx);
+- **valore manuale**.
 
-> La verifica di legge va fatta locale per locale: qui il calcolo è sull'intera superficie del piano, quindi è un'indicazione.
+## Destinazione d'uso e linee di soglia
+
+Prima del calcolo scegli la destinazione d'uso. Questa imposta l'altezza del piano di lavoro e le **linee di soglia** che vengono disegnate sulla pianta di ogni livello:
+
+| Uso | Linee (lux superati per metà delle ore di luce) | Fonte |
+|---|---|---|
+| Residenziale | 100 camera · 150 soggiorno · 200 cucina | Annesso nazionale UK alla EN 17037 (BRE 209:2022) |
+| Uffici | 300 ufficio · 500 lavoro continuo | EN 17037 livelli minimo e medio |
+| Industriale | 300 · 500 · 750 | EN 17037 livelli minimo, medio e alto |
+
+Le soglie sono modificabili e ogni linea si può nascondere. Dentro una linea c'è abbastanza luce per quell'uso. Le zone fuori dalle linee sono adatte a servizi, core, bagni e depositi. Una stanza è conforme se almeno metà della sua superficie è dentro la linea giusta.
+
+Per ogni piano l'app indica i m² e la percentuale di superficie dentro ciascuna linea, il DF medio e mediano, il livello EN 17037 raggiunto dall'intero piano e, per i progetti in Italia, il richiamo al D.M. 5/7/1975 (DF medio ≥ 2% per locale).
 
 Per ridurre il rumore del calcolo Monte Carlo, i valori sono leggermente smussati (media 3×3 sulla griglia).
 
@@ -71,12 +83,15 @@ src/app.js            viewer three.js, import .3dm, UI, risultati
 src/engine.js         motore: BVH, path tracing DF, griglia sensori
 src/worker.js         Web Worker per il calcolo parallelo
 src/demo.js           modello di esempio procedurale
+src/climate.js        località: tabella EN 17037 e lettura file EPW
+src/contour.js        linee di soglia (marching squares)
 vendor/rhino3dm/      rhino3dm.js + wasm (lettura file .3dm)
 test/                 test motore, test end-to-end, generatore .3dm di prova
 ```
 
 ## Idee per le prossime versioni
 
+- Riconoscimento automatico delle stanze e verifica per singolo locale
 - Cielo sereno e sole diretto per data e ora (illuminamento puntuale, ore di sole)
 - Climate-based daylight (sDA, ASE, UDI) da file meteo EPW
 - Trasmittanza del vetro dipendente dall'angolo, materiali per singolo oggetto
