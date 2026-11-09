@@ -55,12 +55,12 @@ export function makeDemo() {
   box(context, -4, -16, 0, 9, -11, 12);
   const toF = (a) => new Float32Array(a);
   return {
-    name: 'Esempio · edificio su 2 piani',
+    name: 'Sample · two-storey building',
     layers: [
-      { name: 'Solai', color: '#c9b79c' },
-      { name: 'Muri', color: '#d8d4cc' },
-      { name: 'Vetri', color: '#8fb8d8' },
-      { name: 'Contesto', color: '#a9aaa6' },
+      { name: 'Slabs', color: '#c9b79c' },
+      { name: 'Walls', color: '#d8d4cc' },
+      { name: 'Glazing', color: '#8fb8d8' },
+      { name: 'Context', color: '#a9aaa6' },
     ],
     objects: [
       { layer: 0, positions: toF(slabs) },

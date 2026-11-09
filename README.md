@@ -1,102 +1,99 @@
 # Daylight Slab Analyzer
 
-Web app per calcolare il **Daylight Factor (DF)** e l'illuminamento naturale sulle solette interne di un modello **Rhino (.3dm)**, direttamente nel browser. Non serve installare niente: il file non lascia il tuo computer.
+A browser app that computes the **Daylight Factor (DF)** and natural illuminance on the interior floor slabs of a **Rhino (.3dm)** model. Nothing to install, and your file never leaves your computer.
 
-![schema](https://img.shields.io/badge/cielo-CIE%20coperto-e0892b) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![sky](https://img.shields.io/badge/sky-CIE%20overcast-e0892b) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
-## Come si usa
+## How to use
 
-1. **Carica il modello**: trascina un file `.3dm` (o prova il modello di esempio).
-2. **Assegna i layer**: per ogni layer scegli il ruolo:
-   - **Solaio**: superfici su cui misurare la luce (la griglia di calcolo viene creata sulle facce orizzontali rivolte verso l'alto);
-   - **Opaco**: muri, soffitti, contesto, ostruzioni;
-   - **Vetro**: lascia passare la luce con trasmittanza τ (default 0,70);
-   - **Ignora**: escluso dal calcolo.
+1. **Load the model**: drop a `.3dm` file (or try the sample model).
+2. **Assign layers**:
+   - **Slab**: surfaces where daylight is measured (the grid is built on upward-facing horizontal faces)
+   - **Opaque**: walls, ceilings, context and obstructions, with a **reflectance** (empty = auto by orientation: floors 0.2, walls 0.5, ceilings 0.7)
+   - **Glass**: lets light through with a **transmittance** (default 0.70)
+   - **Ignore**: excluded from the calculation
 
-   I ruoli vengono proposti in automatico dal nome del layer (es. `SOLAI`, `VETRI`, `Finestre`, `Glass`…).
-   La riflettanza ρ può essere lasciata su *auto*: pavimenti 0,2, pareti 0,5, soffitti 0,7.
-3. **Parametri**: passo della griglia, altezza del piano di lavoro (0,75 m), riflettanza del suolo, illuminamento esterno di riferimento (per convertire il DF in lux) e qualità.
-4. **Calcola**: il calcolo usa tutti i core del computer.
-5. **Risultati**: mappa a colori per livello (vista 3D o pianta), DF medio, minimo, uniformità, percentuale di area sopra la soglia, valori in lux, esportazione CSV e immagine. Passando il mouse sulla mappa leggi il valore puntuale.
+   Roles and typical reflectances are suggested from layer names (`SLABS`, `Glass`, `Grass`, `Context`…).
+3. **Location & building use** (see below).
+4. **Settings**: grid spacing, work plane height, ground reflectance, quality.
+5. **Run**: the calculation uses every CPU core.
+6. **Results**: daylight map per level (3D or plan), threshold lines, usable area per use, CSV export.
+7. **Exploded axonometric**: all floors stacked in a high-resolution PNG, with level names, area percentages, legend and north arrow.
 
-### Preparare il file in Rhino
+### Preparing the Rhino file
 
-L'app legge le **mesh di rendering** salvate nel file. Se alcune polisuperfici non compaiono:
+The app reads the **render meshes** saved in the file. If some polysurfaces are missing:
 
-- salva il file dopo averlo visto in modalità *Shaded* o *Rendered*, e **non** usare *Save Small*;
-- oppure converti la geometria in mesh con il comando `_Mesh` prima di salvare.
+- save the file after viewing it in *Shaded* or *Rendered* mode, and **don't** use *Save Small*;
+- or convert the geometry with `_Mesh` before saving.
 
-Le unità del modello (mm, cm, m…) vengono lette dal file; puoi forzarle dal menu *Unità*.
+Model units (mm, cm, m…) are read from the file and can be overridden from the *Units* menu.
 
-## Località
+## Location
 
-Il Daylight Factor non dipende dalla località: è un rapporto calcolato con cielo coperto standard. Dalla località dipende invece **quanti lux corrispondono a un dato DF**, attraverso l'illuminamento esterno diffuso mediano nelle ore di luce (*E<sub>v,d,med</sub>*, EN 17037). Per questo la località sposta le soglie e le linee.
+The Daylight Factor does not depend on location: it is a ratio under a standard overcast sky. What depends on location is **how many lux a given DF corresponds to**, through the median external diffuse horizontal illuminance during daylight hours (*E<sub>v,d,med</sub>*, EN 17037). The location therefore shifts the thresholds and the lines.
 
-Ci sono tre modi per indicarla:
+- **`.epw` weather file** for any place worldwide (free from [climate.onebuilding.org](https://climate.onebuilding.org/)). The app takes the median diffuse horizontal illuminance over the hours with the sun above the horizon. If the file has no illuminance data, it estimates it from diffuse radiation × 120 lm/W.
+- **33 European capitals** with the official values of EN 17037 Table A.3 (e.g. Rome 19,200 lx, London 14,100 lx, Oslo 12,400 lx).
+- **Manual value**.
 
-- **File clima `.epw`** di qualsiasi luogo al mondo (gratis su [climate.onebuilding.org](https://climate.onebuilding.org/)). L'app calcola la mediana dell'illuminamento diffuso orizzontale nelle ore con il sole sopra l'orizzonte. Se il file non contiene dati di illuminamento, li stima dalla radiazione diffusa con un'efficacia di 120 lm/W;
-- **33 capitali europee** con i valori ufficiali della EN 17037, tab. A.3 (es. Roma 19.200 lx, Londra 14.100 lx, Oslo 12.400 lx);
-- **valore manuale**.
+## Building use and threshold lines
 
-## Destinazione d'uso e linee di soglia
+The building use sets the work plane height and the **threshold lines** drawn on each floor plan:
 
-Prima del calcolo scegli la destinazione d'uso. Questa imposta l'altezza del piano di lavoro e le **linee di soglia** che vengono disegnate sulla pianta di ogni livello:
-
-| Uso | Linee (lux superati per metà delle ore di luce) | Fonte |
+| Use | Lines (lux exceeded for half of daylight hours) | Source |
 |---|---|---|
-| Residenziale | 100 camera · 150 soggiorno · 200 cucina | Annesso nazionale UK alla EN 17037 (BRE 209:2022) |
-| Uffici | 300 ufficio · 500 lavoro continuo | EN 17037 livelli minimo e medio |
-| Industriale | 300 · 500 · 750 | EN 17037 livelli minimo, medio e alto |
+| Residential | 100 bedroom · 200 kitchen / living room | UK National Annex to EN 17037 (BRE 209:2022) |
+| Office | 300 office · 500 continuous desk work | EN 17037 minimum and medium levels |
+| Industrial | 300 · 500 · 750 | EN 17037 minimum, medium and high levels |
 
-Le soglie sono modificabili e ogni linea si può nascondere. Dentro una linea c'è abbastanza luce per quell'uso. Le zone fuori dalle linee sono adatte a servizi, core, bagni e depositi. Una stanza è conforme se almeno metà della sua superficie è dentro la linea giusta.
+Thresholds can be edited and each line can be switched off. Inside a line there is enough daylight for that use. Areas outside the lines suit services, cores, bathrooms and storage. A room complies when at least half of its floor area is inside the right line.
 
-Per ogni piano l'app indica i m² e la percentuale di superficie dentro ciascuna linea, il DF medio e mediano, il livello EN 17037 raggiunto dall'intero piano e, per i progetti in Italia, il richiamo al D.M. 5/7/1975 (DF medio ≥ 2% per locale).
+For each floor the app reports the m² and percentage inside each line, mean and median DF, the EN 17037 level reached by the whole floor, and, for projects in Italy, a reminder of D.M. 5/7/1975 (mean DF ≥ 2% per room).
 
-Per ridurre il rumore del calcolo Monte Carlo, i valori sono leggermente smussati (media 3×3 sulla griglia).
+## Calculation method
 
-## Metodo di calcolo
+- **Sky**: CIE standard overcast sky, `L(γ) = Lz·(1 + 2 sin γ)/3`.
+- **Monte Carlo path tracing** from each grid point over the hemisphere, with stratified cosine sampling and diffuse inter-reflections (unbiased Russian roulette with probability ρ).
+- **Ground**: Lambertian plane with reflectance ρg lit by the sky.
+- **Glass**: specular transmission with constant τ (no angular dependence, so it slightly overestimates light at grazing angles).
+- **BVH** written from scratch (`src/engine.js`), dependency-free, also usable in Node.
+- **Filters**: points with nothing overhead are treated as outdoor; points inside walls or solids are detected with rays along the 6 axis directions.
+- Results are lightly smoothed (3×3 average on the grid) to reduce Monte Carlo noise.
 
-- **Cielo**: cielo coperto standard CIE, con luminanza `L(γ) = Lz·(1 + 2 sin γ)/3`. Il DF non dipende quindi da orientamento, data e ora.
-- **Path tracing Monte Carlo** dal punto di calcolo verso l'emisfero, con campionamento coseno stratificato e interriflessioni diffuse (roulette russa con probabilità pari a ρ, senza bias).
-- **Suolo**: piano lambertiano con riflettanza ρg illuminato dal cielo.
-- **Vetro**: trasmissione speculare con τ costante, senza dipendenza angolare. Questo tende a sovrastimare leggermente la luce che entra con angoli radenti.
-- **BVH** scritta da zero (`src/engine.js`), senza dipendenze, utilizzabile anche in Node.
-- **Filtri**: i punti senza nulla sopra (terrazzi, coperture) sono esclusi come esterni. I punti dentro muri o solidi sono riconosciuti lanciando raggi nelle 6 direzioni degli assi.
+Checks (`npm test`): an unobstructed horizontal point gives DF = 100%; an unobstructed vertical surface gives ≈ 49.6% (39.6% sky + 10% ground); the BVH matches brute force.
 
-Verifiche (`npm test`): il punto orizzontale non ostruito dà DF = 100%, la superficie verticale non ostruita dà ≈ 49,6% (39,6% dal cielo + 10% dal suolo), e la BVH dà gli stessi risultati della forza bruta.
+> ⚠️ Results are indicative and meant for design. For formal submissions, verify them with validated software (Radiance/Honeybee, DIALux, etc.).
 
-> ⚠️ I risultati sono indicativi e utili in fase di progetto. Per pratiche ufficiali verifica con software validati (Radiance/Honeybee, DIALux, ecc.).
-
-## Sviluppo
+## Development
 
 ```bash
-npm install          # solo per i test (three, rhino3dm, playwright-core)
-npm test             # test del motore in Node
-npx serve .          # o qualsiasi server statico, poi apri http://localhost:3000
+npm install          # only for tests (three, rhino3dm, playwright-core)
+npm test             # engine tests in Node
+npx serve .          # or any static server, then open http://localhost:3000
 ```
 
-Struttura:
-
 ```
-index.html            interfaccia
-src/app.js            viewer three.js, import .3dm, UI, risultati
-src/engine.js         motore: BVH, path tracing DF, griglia sensori
-src/worker.js         Web Worker per il calcolo parallelo
-src/demo.js           modello di esempio procedurale
-src/climate.js        località: tabella EN 17037 e lettura file EPW
-src/contour.js        linee di soglia (marching squares)
-vendor/rhino3dm/      rhino3dm.js + wasm (lettura file .3dm)
-test/                 test motore, test end-to-end, generatore .3dm di prova
+index.html            user interface
+src/app.js            three.js viewer, .3dm import, UI, results
+src/engine.js         BVH, DF path tracing, sensor grid
+src/worker.js         Web Worker for parallel computation
+src/climate.js        location: EN 17037 table and EPW reader
+src/contour.js        threshold lines (marching squares)
+src/exploded.js       exploded axonometric export
+src/demo.js           procedural sample model
+vendor/rhino3dm/      rhino3dm.js + wasm (reads .3dm files)
+test/                 engine tests, end-to-end test, sample .3dm generator
 ```
 
-## Idee per le prossime versioni
+## Roadmap
 
-- Riconoscimento automatico delle stanze e verifica per singolo locale
-- Cielo sereno e sole diretto per data e ora (illuminamento puntuale, ore di sole)
-- Climate-based daylight (sDA, ASE, UDI) da file meteo EPW
-- Trasmittanza del vetro dipendente dall'angolo, materiali per singolo oggetto
-- Report PDF
+- Automatic room detection and per-room compliance
+- Angle-dependent glass transmittance and frame factor
+- Clear sky and direct sun by date and time (point-in-time illuminance, sunlight hours)
+- Climate-based daylight (sDA, ASE, UDI) from EPW files
+- PDF report
 
-## Licenza
+## License
 
 MIT

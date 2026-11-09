@@ -5,17 +5,17 @@
 
 // EN 17037:2018 Table A.3 — Ev,d,med for the capitals of CEN member countries
 export const EN17037_CAPITALS = [
-  ['Nicosia', 'Cipro', 34.88, 18100], ['La Valletta', 'Malta', 35.54, 16500], ['Atene', 'Grecia', 37.90, 19400],
-  ['Lisbona', 'Portogallo', 38.73, 18220], ['Ankara', 'Turchia', 40.12, 19000], ['Madrid', 'Spagna', 40.45, 16900],
-  ['Roma', 'Italia', 41.80, 19200], ['Skopje', 'Macedonia del Nord', 42.00, 15400], ['Sofia', 'Bulgaria', 42.73, 18700],
-  ['Bucarest', 'Romania', 44.50, 18200], ['Zagabria', 'Croazia', 45.48, 17000], ['Lubiana', 'Slovenia', 46.22, 17000],
-  ['Berna', 'Svizzera', 46.25, 16000], ['Budapest', 'Ungheria', 47.48, 18100], ['Vienna', 'Austria', 48.12, 16000],
-  ['Bratislava', 'Slovacchia', 48.20, 16300], ['Parigi', 'Francia', 48.73, 15900], ['Lussemburgo', 'Lussemburgo', 49.36, 16000],
-  ['Praga', 'Repubblica Ceca', 50.10, 14900], ['Bruxelles', 'Belgio', 50.90, 15000], ['Londra', 'Regno Unito', 51.51, 14100],
-  ['Varsavia', 'Polonia', 52.17, 14700], ['Amsterdam', 'Paesi Bassi', 52.30, 14400], ['Berlino', 'Germania', 52.47, 13900],
-  ['Dublino', 'Irlanda', 53.43, 14900], ['Vilnius', 'Lituania', 54.88, 15300], ['Copenaghen', 'Danimarca', 55.63, 14200],
-  ['Riga', 'Lettonia', 56.57, 13600], ['Tallinn', 'Estonia', 59.25, 13600], ['Stoccolma', 'Svezia', 59.65, 12100],
-  ['Oslo', 'Norvegia', 59.90, 12400], ['Helsinki', 'Finlandia', 60.32, 13500], ['Reykjavik', 'Islanda', 64.13, 11500],
+  ['Nicosia', 'Cyprus', 34.88, 18100], ['Valletta', 'Malta', 35.54, 16500], ['Athens', 'Greece', 37.90, 19400],
+  ['Lisbon', 'Portugal', 38.73, 18220], ['Ankara', 'Turkey', 40.12, 19000], ['Madrid', 'Spain', 40.45, 16900],
+  ['Rome', 'Italy', 41.80, 19200], ['Skopje', 'North Macedonia', 42.00, 15400], ['Sofia', 'Bulgaria', 42.73, 18700],
+  ['Bucharest', 'Romania', 44.50, 18200], ['Zagreb', 'Croatia', 45.48, 17000], ['Ljubljana', 'Slovenia', 46.22, 17000],
+  ['Bern', 'Switzerland', 46.25, 16000], ['Budapest', 'Hungary', 47.48, 18100], ['Vienna', 'Austria', 48.12, 16000],
+  ['Bratislava', 'Slovakia', 48.20, 16300], ['Paris', 'France', 48.73, 15900], ['Luxembourg', 'Luxembourg', 49.36, 16000],
+  ['Prague', 'Czech Republic', 50.10, 14900], ['Brussels', 'Belgium', 50.90, 15000], ['London', 'United Kingdom', 51.51, 14100],
+  ['Warsaw', 'Poland', 52.17, 14700], ['Amsterdam', 'Netherlands', 52.30, 14400], ['Berlin', 'Germany', 52.47, 13900],
+  ['Dublin', 'Ireland', 53.43, 14900], ['Vilnius', 'Lithuania', 54.88, 15300], ['Copenhagen', 'Denmark', 55.63, 14200],
+  ['Riga', 'Latvia', 56.57, 13600], ['Tallinn', 'Estonia', 59.25, 13600], ['Stockholm', 'Sweden', 59.65, 12100],
+  ['Oslo', 'Norway', 59.90, 12400], ['Helsinki', 'Finland', 60.32, 13500], ['Reykjavik', 'Iceland', 64.13, 11500],
 ].map(([city, country, lat, E]) => ({ city, country, lat, E }));
 
 const DIFFUSE_EFFICACY = 120; // lm/W, used only when the EPW has no illuminance data
@@ -41,10 +41,10 @@ const CUM_DAYS = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
 export function parseEPW(text) {
   const lines = text.split(/\r?\n/);
   const head = (lines[0] || '').split(',');
-  if (head[0].trim().toUpperCase() !== 'LOCATION') throw new Error('Il file non sembra un EPW (manca la riga LOCATION).');
+  if (head[0].trim().toUpperCase() !== 'LOCATION') throw new Error('This does not look like an EPW file (missing LOCATION line).');
   const city = head[1] || '', region = head[2] || '', country = head[3] || '';
   const lat = parseFloat(head[6]), lon = parseFloat(head[7]), tz = parseFloat(head[8]);
-  if (!isFinite(lat) || !isFinite(lon) || !isFinite(tz)) throw new Error('Coordinate non valide nella riga LOCATION.');
+  if (!isFinite(lat) || !isFinite(lon) || !isFinite(tz)) throw new Error('Invalid coordinates in the LOCATION line.');
   const illum = [], rad = [];
   for (let i = 8; i < lines.length; i++) {
     const f = lines[i].split(',');
@@ -58,9 +58,9 @@ export function parseEPW(text) {
     if (isFinite(ill) && ill > 0 && ill < 999900) illum.push(ill);
     if (isFinite(dhr) && dhr >= 0 && dhr < 9999) rad.push(dhr * DIFFUSE_EFFICACY);
   }
-  let data = illum, source = 'illuminamento';
-  if (illum.length < rad.length * 0.8) { data = rad; source = 'radiazione diffusa × ' + DIFFUSE_EFFICACY + ' lm/W'; }
-  if (data.length < 500) throw new Error('Dati orari insufficienti nel file EPW.');
+  let data = illum, source = 'illuminance data';
+  if (illum.length < rad.length * 0.8) { data = rad; source = 'diffuse radiation × ' + DIFFUSE_EFFICACY + ' lm/W'; }
+  if (data.length < 500) throw new Error('Not enough hourly data in the EPW file.');
   data.sort((a, b) => a - b);
   const median = data[data.length >> 1];
   return { city: city.replace(/[._]/g, ' ').trim(), region, country, lat, lon, tz, E: Math.round(median / 100) * 100, hours: data.length, source };

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -84,6 +84,17 @@ td input[type=number]{padding:3px 4px;font-size:12px;width:52px}
 .note{font-size:11.5px;color:var(--muted);margin-top:10px}
 .pill{display:inline-block;padding:1px 7px;border-radius:10px;color:#fff;font-size:11px;font-family:'IBM Plex Sans',sans-serif}
 .legend .zl .zrow{font-size:11.5px}
+th.nt{text-transform:none;letter-spacing:0;font-size:11.5px}
+.na{color:#b7b1a6;display:inline-block;width:52px;text-align:center}
+.lvrow{display:flex;gap:6px;align-items:center;margin-top:5px;font-size:12px;color:var(--muted)}
+.lvrow input{font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line);border-radius:7px;flex:1}
+.lvrow span{font-family:var(--mono);width:58px}
+.modal{position:fixed;inset:0;background:rgba(20,20,22,.55);display:flex;align-items:center;justify-content:center;z-index:20;padding:24px}
+.modal[hidden]{display:none}
+.mbox{background:var(--panel);border-radius:12px;max-width:min(1400px,96vw);max-height:94vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.mhead{display:flex;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}
+.mimg{overflow:auto;background:#fff}
+.mimg img{display:block;max-width:100%;height:auto}
 .drop.small{padding:10px}
 .drop.small b{font-size:13px}
 .drop a{color:var(--accent-ink)}
@@ -122,19 +133,19 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
 <aside>
   <header>
     <h1><span class="sun"></span>Daylight Slab Analyzer</h1>
-    <p>Daylight Factor sulle solette interne · cielo coperto CIE · modelli Rhino .3dm</p>
+    <p>Daylight on interior floor slabs · CIE overcast sky · Rhino .3dm models</p>
   </header>
 
   <section id="s-load">
-    <h2><span class="n">1</span>Modello</h2>
+    <h2><span class="n">1</span>Model</h2>
     <div class="drop" id="drop">
-      <b>Trascina qui un file .3dm</b>
-      <span>oppure clicca per sceglierlo</span>
+      <b>Drop a .3dm file here</b>
+      <span>or click to browse</span>
       <input type="file" id="file" accept=".3dm" hidden>
     </div>
     <div class="row" style="justify-content:space-between">
-      <button class="link" id="demo">Prova con un modello di esempio</button>
-      <label class="f" style="flex-direction:row;align-items:center;gap:6px">Unità
+      <button class="link" id="demo">Try a sample model</button>
+      <label class="f" style="flex-direction:row;align-items:center;gap:6px">Units
         <select id="units" style="width:auto">
           <option value="auto">auto</option><option value="0.001">mm</option><option value="0.01">cm</option>
           <option value="1">m</option><option value="0.0254">in</option><option value="0.3048">ft</option>
@@ -145,101 +156,121 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
   </section>
 
   <section id="s-layers" class="disabled">
-    <h2><span class="n">2</span>Layer</h2>
-    <table>
-      <thead><tr><th>Layer</th><th>Ruolo</th><th title="Riflettanza (vuoto = automatica: pavimento 0.2, pareti 0.5, soffitti 0.7)">ρ</th><th title="Trasmittanza luminosa del vetro">τ</th></tr></thead>
+    <h2><span class="n">2</span>Layers</h2>
+    <table class="layers">
+      <thead><tr><th>Layer</th><th>Role</th><th class="nt" title="Light reflectance of the surface (0–1). Empty = auto by orientation">Reflect. ρ</th><th class="nt" title="Visible light transmittance of glazing (0–1)">Transm. τ</th></tr></thead>
       <tbody id="layerRows"></tbody>
     </table>
-    <p class="hint"><b>Solaio</b> = superfici dove misurare la luce. ρ vuoto = automatico per orientamento (pavimenti 0.2, pareti 0.5, soffitti 0.7).</p>
+    <p class="hint"><b>Slab</b> = surfaces where daylight is measured. <b>Reflectance</b> applies to opaque layers; empty = auto by orientation (floors 0.2, walls 0.5, ceilings 0.7). <b>Transmittance</b> applies to glass only.</p>
   </section>
 
   <section id="s-site" class="disabled">
-    <h2><span class="n">3</span>Località e destinazione d'uso</h2>
-    <label class="f"><span>Località</span>
+    <h2><span class="n">3</span>Location &amp; building use</h2>
+    <label class="f"><span>Location</span>
       <select id="loc"></select>
     </label>
     <div class="drop small" id="epwDrop" style="margin-top:8px">
-      <b>Carica un file clima .epw</b>
-      <span>qualsiasi località nel mondo · <a href="https://climate.onebuilding.org/" target="_blank" rel="noopener">scaricalo gratis qui</a></span>
+      <b>Upload an .epw weather file</b>
+      <span>any location worldwide · <a href="https://climate.onebuilding.org/" target="_blank" rel="noopener">free download here</a></span>
       <input type="file" id="epwFile" accept=".epw" hidden>
     </div>
     <div class="grid2" style="margin-top:8px">
-      <label class="f" title="Illuminamento esterno diffuso mediano nelle ore di luce (EN 17037)"><span>E diffusa mediana <i>lux</i></span><input type="number" id="eext" value="19200" min="1000" step="100"></label>
+      <label class="f" title="Median external diffuse horizontal illuminance during daylight hours (EN 17037)"><span>Median diffuse E <i>lux</i></span><input type="number" id="eext" value="19200" min="1000" step="100"></label>
       <div id="locInfo" class="hint" style="margin:0;align-self:end"></div>
     </div>
-    <label class="f" style="margin-top:12px"><span>Destinazione d'uso</span>
+    <label class="f" style="margin-top:12px"><span>Building use</span>
       <select id="use">
-        <option value="res">Residenziale</option>
-        <option value="off">Uffici</option>
-        <option value="ind">Industriale / produttivo</option>
+        <option value="res">Residential</option>
+        <option value="off">Office</option>
+        <option value="ind">Industrial</option>
       </select>
     </label>
-    <table style="margin-top:8px" id="thrTable"><thead><tr><th></th><th>Linea</th><th style="text-align:right">lux</th></tr></thead><tbody id="thrRows"></tbody></table>
+    <table style="margin-top:8px" id="thrTable"><thead><tr><th></th><th>Line</th><th style="text-align:right">lux</th></tr></thead><tbody id="thrRows"></tbody></table>
     <p class="hint" id="useNote"></p>
   </section>
 
   <section id="s-params" class="disabled">
-    <h2><span class="n">4</span>Parametri</h2>
+    <h2><span class="n">4</span>Settings</h2>
     <div class="grid2">
-      <label class="f"><span>Passo griglia <i>m</i></span><input type="number" id="spacing" value="0.5" min="0.1" step="0.1"></label>
-      <label class="f"><span>Piano di lavoro <i>m</i></span><input type="number" id="height" value="0.75" min="0" step="0.05"></label>
-      <label class="f"><span>Riflettanza suolo</span><input type="number" id="ground" value="0.2" min="0" max="1" step="0.05"></label>
-      <label class="f"><span>Qualità</span>
+      <label class="f"><span>Grid spacing <i>m</i></span><input type="number" id="spacing" value="0.5" min="0.1" step="0.1"></label>
+      <label class="f"><span>Work plane height <i>m</i></span><input type="number" id="height" value="0.85" min="0" step="0.05"></label>
+      <label class="f"><span>Ground reflectance</span><input type="number" id="ground" value="0.2" min="0" max="1" step="0.05"></label>
+      <label class="f"><span>Quality</span>
         <select id="quality">
-          <option value="64,4">Bozza · 64 raggi</option>
-          <option value="256,6" selected>Media · 256 raggi</option>
-          <option value="1024,8">Alta · 1024 raggi</option>
+          <option value="64,4">Draft · 64 rays</option>
+          <option value="256,6" selected>Medium · 256 rays</option>
+          <option value="1024,8">High · 1024 rays</option>
         </select>
       </label>
-
     </div>
-    <label class="chk"><input type="checkbox" id="indoorOnly" checked> Solo punti interni (con qualcosa sopra)</label>
-    <label class="chk"><input type="checkbox" id="solidFilter" checked> Scarta i punti dentro muri e solidi</label>
+    <label class="chk"><input type="checkbox" id="indoorOnly" checked> Indoor points only (something overhead)</label>
+    <label class="chk"><input type="checkbox" id="solidFilter" checked> Skip points inside walls and solids</label>
     <div id="estimate" class="hint"></div>
   </section>
 
   <section id="s-run" class="disabled">
-    <button class="primary" id="run">Calcola Daylight Factor</button>
+    <button class="primary" id="run">Run Daylight Factor</button>
     <div class="progress"><div id="bar"></div></div>
-    <div class="status" id="status">pronto</div>
+    <div class="status" id="status">ready</div>
   </section>
 
   <section id="s-results" class="disabled">
-    <h2><span class="n">5</span>Risultati</h2>
+    <h2><span class="n">5</span>Results</h2>
     <div id="summary"></div>
     <div style="margin-top:12px;overflow-x:auto"><table class="stats" id="stats"></table></div>
     <div class="row">
-      <button id="csv">Scarica CSV</button>
-      <button id="csvCopy">Copia CSV</button>
-      <button id="png">Immagine</button>
+      <button id="csv">Download CSV</button>
+      <button id="csvCopy">Copy CSV</button>
+      <button id="png">Screenshot</button>
     </div>
-    <div id="evalDetail"></div>
+  </section>
+
+  <section id="s-export" class="disabled">
+    <h2><span class="n">6</span>Exploded axonometric</h2>
+    <p class="hint" style="margin-top:0">All floors stacked in an exploded axo, with level labels and legend, as a high-resolution PNG. Rotate the 3D view to choose the angle.</p>
+    <div id="lvNames"></div>
+    <div class="grid2" style="margin-top:8px">
+      <label class="f"><span>Floor separation <i>× storey</i></span><input type="number" id="exGap" value="1.2" min="0" max="5" step="0.1"></label>
+      <label class="f"><span>Image width</span>
+        <select id="exWidth"><option value="2400">2400 px</option><option value="4800" selected>4800 px</option><option value="7200">7200 px</option></select>
+      </label>
+    </div>
+    <label class="chk"><input type="checkbox" id="exLines" checked> Threshold lines</label>
+    <label class="chk"><input type="checkbox" id="exRoof" checked> Roof on top</label>
+    <label class="chk"><input type="checkbox" id="exStats" checked> Area percentages next to each level</label>
+    <button class="primary" id="exRun" style="margin-top:10px">Create exploded view</button>
   </section>
 
   <footer>
-    Calcolo Monte Carlo con interriflessioni, cielo coperto CIE (indipendente da orientamento e data). I risultati sono indicativi: verificali con uno strumento certificato per pratiche ufficiali.
+    Monte Carlo calculation with inter-reflections under the CIE overcast sky. Results are indicative: verify them with validated software for formal submissions.
   </footer>
 </aside>
 
 <main>
   <div id="view"></div>
-  <div class="empty" id="empty"><div><b>Carica un modello Rhino</b>Assegna i layer (solai, vetri, muri) e calcola quanta luce naturale arriva sui solai interni.</div></div>
+  <div class="empty" id="empty"><div><b>Load a Rhino model</b>Assign layers (slabs, glass, walls) and see how much daylight reaches the interior floors.</div></div>
   <div class="toolbar">
-    <div class="seg"><button id="v3d" class="on">3D</button><button id="vPlan">Pianta</button></div>
-    <select id="level"><option value="all">Tutti i livelli</option></select>
-    <div class="seg"><button id="mZone" class="on">Zone</button><button id="mDF">DF %</button><button id="mLux">lux</button></div>
-    <button id="lines" class="on-t">Linee: sì</button>
-    <button id="ghost">Modello: pieno</button>
+    <div class="seg"><button id="v3d" class="on">3D</button><button id="vPlan">Plan</button></div>
+    <select id="level"><option value="all">All levels</option></select>
+    <div class="seg"><button id="mZone" class="on">Zones</button><button id="mDF">DF %</button><button id="mLux">lux</button></div>
+    <button id="lines">Lines: on</button>
+    <button id="ghost">Model: solid</button>
   </div>
   <div class="legend" id="legend">
     <div class="t"><span id="lgTitle">Daylight Factor (%)</span><span id="lgCount"></span></div>
     <div class="bar" id="lgBar"></div>
     <div class="ticks" id="lgTicks"></div>
     <div class="zl" id="lgZones"></div>
-    <div class="rng" id="lgRng">Scala da <input type="number" id="lgMin" value="0" step="0.5"> a <input type="number" id="lgMax" value="5" step="0.5"></div>
+    <div class="rng" id="lgRng">Scale from <input type="number" id="lgMin" value="0" step="0.5"> to <input type="number" id="lgMax" value="5" step="0.5"></div>
   </div>
   <div id="tip"></div>
 </main>
+</div>
+<div id="modal" class="modal" hidden>
+  <div class="mbox">
+    <div class="mhead"><b id="mTitle">Exploded axonometric</b><span id="mInfo" class="hint" style="margin:0"></span><span style="flex:1"></span><button id="mDownload" class="primary" style="width:auto;padding:7px 14px">Download PNG</button><button id="mClose">Close</button></div>
+    <div class="mimg"><img id="mImg" alt="Exploded axonometric daylight view"></div>
+  </div>
 </div>
 <script type="module" src="src/app.js"></script>
 </body>
