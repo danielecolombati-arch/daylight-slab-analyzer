@@ -1,0 +1,16 @@
+{
+  "name": "daylight-slab-analyzer",
+  "version": "1.0.0",
+  "description": "Daylight Factor analysis on interior slabs of Rhino 3dm models, in the browser",
+  "scripts": {
+    "test": "node test/bvh.test.mjs && node test/engine.test.mjs",
+    "e2e": "node test/e2e.mjs"
+  },
+  "license": "MIT",
+  "type": "module",
+  "devDependencies": {
+    "playwright-core": "^1.65.0",
+    "rhino3dm": "^8.35.0",
+    "three": "^0.187.0"
+  }
+}

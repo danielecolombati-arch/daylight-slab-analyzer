@@ -1,0 +1,33 @@
+import { chromium } from 'playwright-core'; import fs from 'fs';
+const b = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--use-gl=swiftshader','--enable-unsafe-swiftshader','--no-sandbox'] });
+const p = await b.newPage({ viewport: { width: 1440, height: 900 } });
+await p.route('https://cdn.jsdelivr.net/npm/three@0.187.0/**', async r => { const u=new URL(r.request().url()); const f='node_modules/three'+u.pathname.replace('/npm/three@0.187.0',''); r.fulfill({ body: fs.readFileSync(f), contentType:'text/javascript' }); });
+await p.route('https://fonts.**', r => r.fulfill({ body: '', contentType:'text/css' }));
+p.on('console', m => { if (m.type()!=='log' && m.type()!=='debug') console.log('[console]', m.type(), m.text()); });
+p.on('pageerror', e => console.log('[pageerror]', e.message));
+await p.goto('http://localhost:8123/index.html');
+await p.click('#demo');
+await p.waitForTimeout(500);
+console.log('estimate:', await p.textContent('#estimate'));
+await p.screenshot({ path: 'test/shot_model.png' });
+
+await p.click('#run');
+await p.waitForFunction(() => window.__daylight.result, null, { timeout: 180000 });
+await p.waitForTimeout(800);
+console.log('status:', await p.textContent('#status'));
+console.log('stats:', (await p.innerText('#stats')).replace(/\n/g,' | '));
+await p.screenshot({ path: 'test/shot_demo.png' });
+await p.click('#v3d'); await p.selectOption('#level','all'); await p.waitForTimeout(500);
+await p.screenshot({ path: 'test/shot_demo3d.png' });
+// 3dm
+await p.setInputFiles('#file', 'test/room_mm.3dm');
+await p.waitForFunction(() => window.__daylight.model && window.__daylight.model.name === 'room_mm.3dm' && !window.__daylight.result, null, { timeout: 60000 });
+console.log('3dm info:', await p.innerText('#modelInfo'));
+console.log('layers:', await p.evaluate(() => window.__daylight.model.layers.map(l => l.name + ':' + l.role + ':' + l.tris).join(', ')));
+await p.click('#run');
+await p.waitForFunction(() => window.__daylight.result, null, { timeout: 180000 });
+await p.waitForTimeout(800);
+console.log('status:', await p.textContent('#status'));
+console.log('stats:', (await p.innerText('#stats')).replace(/\n/g,' | '), 'kpi', await p.textContent('#kMean'));
+await p.screenshot({ path: 'test/shot_3dm.png' });
+await b.close();
