@@ -192,8 +192,10 @@ export async function renderExploded(o) {
     const bb = new THREE.Box3();
     const group = new THREE.Group(); group.position.z = off; scene.add(group);
     const edgeSrc = [];
+    // on analysed floors, slabs/ceilings are hidden unless asked for: only the daylight map shows
+    const showFloor = sl.level < 0 || o.slabs;
     for (const [arr, mat] of [[floor, matFloor], [wall, matWall], [glass, matGlass]]) {
-      if (!arr.length) continue;
+      if (!arr.length || (mat === matFloor && !showFloor)) continue;
       const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
       g.computeVertexNormals(); g.computeBoundingBox(); bb.union(g.boundingBox);
       const mesh = new THREE.Mesh(g, mat); mesh.renderOrder = mat === matFloor ? 0 : 3; group.add(mesh);

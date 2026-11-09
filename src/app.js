@@ -910,7 +910,7 @@ $('exRun').onclick = async () => {
       layers, sensors: result.sensors, df: result.df, levels: result.levels, spacing: result.spacing,
       names: result.levels.map((_, i) => levelName(i)), stats,
       ramp: exportRamp(), lines: $('exLines').checked ? L.map((l) => ({ df: dfOf(l.lux), color: l.color })) : [],
-      gap: Math.max(0, parseFloat($('exGap').value) || 0), width: parseInt($('exWidth').value, 10), roof: $('exRoof').checked,
+      gap: Math.max(0, parseFloat($('exGap').value) || 0), width: parseInt($('exWidth').value, 10), roof: $('exRoof').checked, slabs: $('exSlabs').checked,
       viewDir, legend: exportLegend(),
       title: baseName(), subtitle: `${site.label} · ${U.name} · CIE overcast sky, median diffuse illuminance ${fmtInt(result.eext)} lx (EN 17037)`,
     });
