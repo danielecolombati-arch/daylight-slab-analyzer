@@ -28,7 +28,7 @@ function wallX(P, G, y, t, x0, x1, z0, z1, openings) {
 }
 
 export function makeDemo() {
-  const slabs = [], walls = [], glass = [], context = [];
+  const slabs = [], walls = [], glass = [], context = [], core = [];
   const L = 18, D = 11, H = 3.2, T = 0.3, W = 0.3;
   for (let lv = 0; lv < 3; lv++) box(slabs, 0, 0, lv * H - T, L, D, lv * H); // floors + roof
   for (let lv = 0; lv < 2; lv++) {
@@ -51,6 +51,8 @@ export function makeDemo() {
   }
   // balcony / overhang on the upper floor (south)
   box(slabs, 10, -1.6, H - T, L, 0, H);
+  // stair + lift core through both floors
+  box(core, 4, 7.6, -0.3, 7, 10.4, 2 * H);
   // neighbouring building to the south-west
   box(context, -4, -16, 0, 9, -11, 12);
   const toF = (a) => new Float32Array(a);
@@ -61,12 +63,14 @@ export function makeDemo() {
       { name: 'Walls', color: '#d8d4cc' },
       { name: 'Glazing', color: '#8fb8d8' },
       { name: 'Context', color: '#a9aaa6' },
+      { name: 'Core', color: '#9b8f7a' },
     ],
     objects: [
       { layer: 0, positions: toF(slabs) },
       { layer: 1, positions: toF(walls) },
       { layer: 2, positions: toF(glass) },
       { layer: 3, positions: toF(context) },
+      { layer: 4, positions: toF(core) },
     ],
   };
 }

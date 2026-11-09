@@ -11,7 +11,7 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 const $ = (id) => document.getElementById(id);
-const ROLES = { slab: 'Slab', opaque: 'Opaque', glass: 'Glass', ignore: 'Ignore' };
+const ROLES = { slab: 'Slab', opaque: 'Opaque', core: 'Core (excluded)', glass: 'Glass', ignore: 'Ignore' };
 
 // ------------------------------------------------------------------ viewer
 const view = $('view');
@@ -119,6 +119,7 @@ async function loadFile(file) {
 function guessRole(name) {
   const n = name.toLowerCase();
   if (/vetr|glass|glaz|window|finestr|serrament|vitr|lucernar|skylight/.test(n)) return 'glass';
+  if (/core|nucleo|stair|scal[ae]|lift|elevator|ascensor|shaft|cavedi|vano.?scala/.test(n)) return 'core';
   if (/slab|solai|solet|floor|pavim|impalcat|deck/.test(n)) return 'slab';
   if (/(^|[^a-z])(dim|dimensions?|quot[ae]|annot\w*|text|testi?|testo|hatch|tratteggi|curve|linee|lines|grid|griglia|assi|axes|camera|lights?|luci)([^a-z]|$)/.test(n)) return 'ignore';
   return 'opaque';
@@ -317,7 +318,7 @@ function buildSlabTriangles() {
 }
 
 function buildTraceScene() {
-  const mats = { type: [], rho: [], tau: [] }, matOf = new Map();
+  const mats = { type: [], rho: [], tau: [], core: [] }, matOf = new Map();
   model.layers.forEach((L, i) => {
     if (L.role === 'ignore') return;
     matOf.set(i, mats.type.length);
@@ -325,6 +326,7 @@ function buildTraceScene() {
     const r = parseFloat(L.rho);
     mats.rho.push(L.role === 'glass' ? 0 : (isFinite(r) ? clamp(r, 0, 0.98, 0.5) : -1));
     mats.tau.push(L.role === 'glass' ? clamp(L.tau, 0, 1, 0.7) : 0);
+    mats.core.push(L.role === 'core' ? 1 : 0);
   });
   let n = 0;
   for (const o of model.objects) if (matOf.has(o.layer)) n += o.positions.length;
@@ -380,9 +382,10 @@ async function run() {
     await Promise.all(workers.map((w) => call(w, { type: 'init', ...sc }, 'ready')));
     // classify on worker 0
     const { cls } = await call(workers[0], { type: 'classify', sensors }, 'classified');
-    const keep = [];
+    const keep = [], coreZs = [];
     let outdoor = 0, solid = 0;
     for (let i = 0; i < sensors.count; i++) {
+      if (cls[i] === 3) { coreZs.push(sensors.zs[i]); continue; }
       if (cls[i] === 0 && o.indoorOnly) { outdoor++; continue; }
       if (cls[i] === 2 && o.solidFilter) { solid++; continue; }
       keep.push(i);
@@ -406,13 +409,15 @@ async function run() {
       }
     }));
     if (!running) return;
-    result = { sensors: S, df, spacing: o.spacing, eext: o.eext, outdoor, solid, opts: o };
+    result = { sensors: S, df, spacing: o.spacing, eext: o.eext, outdoor, solid, coreZs, opts: o };
     result.levels = makeLevels(S);
+    result.coreZs = coreZs.filter((z) => result.levels.some((l) => z >= l.z - 0.05 && z <= l.max + 0.05)); // ignore roofs/outdoor
     result.raw = df; result.df = smooth(S, df, o.spacing);
     const secs = (performance.now() - t0) / 1000;
     let msg = `done in ${fmtDur(secs)} · ${fmtInt(S.count)} points`;
     if (outdoor) msg += ` · ${fmtInt(outdoor)} outdoor skipped`;
     if (solid) msg += ` · ${fmtInt(solid)} inside solids skipped`;
+    if (result.coreZs.length) msg += ` · ${fmtNum(result.coreZs.length * o.spacing * o.spacing, 0)} m² of core excluded`;
     setStatus(msg);
     if (solid > 0.4 * sensors.count) setStatus(msg + ' ⚠ many points skipped: the model normals may be flipped');
     showResults();
@@ -707,6 +712,13 @@ function useBands() {
 function bandOf(v, bands) { let k = 0; for (let i = 1; i < bands.length; i++) if (v >= bands[i].min) k = i; return k; }
 function mix(hex, t) { const c = new THREE.Color(hex); c.lerp(new THREE.Color(0xffffff), t); return '#' + c.getHexString(); }
 
+function coreArea(lv) {
+  if (!result.coreZs || !result.coreZs.length) return 0;
+  const h2 = result.spacing * result.spacing;
+  if (!lv) return result.coreZs.length * h2;
+  return result.coreZs.filter((z) => z >= lv.z - 0.05 && z <= lv.max + 0.05).length * h2;
+}
+
 function areaStats(idx) {
   const { df, spacing } = result;
   const n = idx.length; if (!n) return null;
@@ -723,7 +735,7 @@ function renderStats() {
   const all = Array.from({ length: result.sensors.count }, (_, i) => i);
   const st = areaStats(lv ? lv.idx : all);
   const where = lv ? levelName(result.levels.indexOf(lv)) : (result.levels.length > 1 ? 'All levels' : 'Analysed slab');
-  let html = `<div class="sumhead"><div class="t">${where} · ${U.name}</div><div class="m">${fmtNum(st.area, 0)} m² analysed · ${escapeHtml(site.label)} · median diffuse E ${fmtInt(result.eext)} lx</div></div>`;
+  let html = `<div class="sumhead"><div class="t">${where} · ${U.name}</div><div class="m">${fmtNum(st.area, 0)} m² analysed${coreArea(lv) ? ` (+ ${fmtNum(coreArea(lv), 0)} m² core excluded)` : ''} · ${escapeHtml(site.label)} · median diffuse E ${fmtInt(result.eext)} lx</div></div>`;
   for (const l of [...L].reverse()) {
     const f = st.frac(dfOf(l.lux));
     html += `<div class="usebar"><div class="top"><span><span class="lsw" style="border-color:${l.color}"></span><b>${escapeHtml(l.label.split(' (')[0])}</b> · ≥ ${fmtInt(l.lux)} lx</span><span style="font-family:var(--mono)">${fmtNum(f * st.area, 0)} m² · ${Math.round(f * 100)}%</span></div>
@@ -751,8 +763,9 @@ function renderStats() {
 
   const rows = result.levels.map((l, i) => [escapeHtml(levelName(i)), areaStats(l.idx)]);
   if (rows.length > 1) rows.push(['Total', areaStats(all)]);
-  $('stats').innerHTML = `<tr><th></th><th>m²</th><th>mean DF</th>${L.map((l) => `<th title="${escapeHtml(l.label)}"><span class="lsw" style="border-color:${l.color};width:10px"></span>≥${fmtInt(l.lux)}</th>`).join('')}</tr>` +
-    rows.map(([nm, e]) => `<tr><td>${nm}</td><td>${fmtNum(e.area, 0)}</td><td>${fmtNum(e.mean, 2)}</td>${L.map((l) => `<td>${Math.round(e.frac(dfOf(l.lux)) * 100)}%</td>`).join('')}</tr>`).join('');
+  const hasCore = result.coreZs && result.coreZs.length;
+  $('stats').innerHTML = `<tr><th></th><th>m²</th>${hasCore ? '<th title="Core area excluded">core</th>' : ''}<th>mean DF</th>${L.map((l) => `<th title="${escapeHtml(l.label)}"><span class="lsw" style="border-color:${l.color};width:10px"></span>≥${fmtInt(l.lux)}</th>`).join('')}</tr>` +
+    rows.map(([nm, e], i) => `<tr><td>${nm}</td><td>${fmtNum(e.area, 0)}</td>${hasCore ? `<td>${fmtNum(coreArea(i < result.levels.length ? result.levels[i] : null), 0)}</td>` : ''}<td>${fmtNum(e.mean, 2)}</td>${L.map((l) => `<td>${Math.round(e.frac(dfOf(l.lux)) * 100)}%</td>`).join('')}</tr>`).join('');
   if (displayMode === 'zone') renderZoneLegend();
 }
 

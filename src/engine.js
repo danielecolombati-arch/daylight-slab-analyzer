@@ -107,6 +107,8 @@ export function buildScene(positions, triMat, mats) {
     matType: Int32Array.from(mats.type),
     matRho: Float32Array.from(mats.rho),
     matTau: Float32Array.from(mats.tau),
+    matCore: Uint8Array.from(mats.core || mats.type.map(() => 0)),
+    hasCore: (mats.core || []).some((c) => c),
     stack: new Int32Array(128),
     hitT: 0,
   };
@@ -338,15 +340,78 @@ export function makeSensorGrid(slabPos, slabId, spacing, height) {
 
 /**
  * Classify sensors: 1 = indoor & free, 0 = outdoor (sky straight above),
- * 2 = inside a solid. A point is inside a solid when most of 6 axis rays hit the
+ * 2 = inside a solid, 3 = core (stairs, lifts, shafts — see isCore). A point is inside a solid when most of 6 axis rays hit the
  * back side of a face (normal pointing away from the point), or when an opaque
  * object sits between the slab surface and the work plane.
  */
 const DIRS = [[0, 0, 1], [0, 0, -1], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0]];
+const H8 = Array.from({ length: 8 }, (_, k) => [Math.cos((k + 0.13) * Math.PI / 4), Math.sin((k + 0.13) * Math.PI / 4)]);
+
+/** Number of core-flagged triangles crossed by the ray with t in (t0, t1]. */
+export function countCoreHits(S, ox, oy, oz, dx, dy, dz, t0, t1) {
+  const nodeB = S.nodeB, nodeI = S.nodeI, tri = S.tri, stack = S.stack;
+  const idx = 1 / dx, idy = 1 / dy, idz = 1 / dz;
+  let sp = 0, count = 0; stack[sp++] = 0;
+  while (sp > 0) {
+    const node = stack[--sp], b = node * 6;
+    let a0 = (nodeB[b] - ox) * idx, a1 = (nodeB[b + 3] - ox) * idx;
+    let tmin = a0 < a1 ? a0 : a1, tmx = a0 < a1 ? a1 : a0;
+    a0 = (nodeB[b + 1] - oy) * idy; a1 = (nodeB[b + 4] - oy) * idy;
+    if (a0 > a1) { const q = a0; a0 = a1; a1 = q; }
+    if (a0 > tmin) tmin = a0; if (a1 < tmx) tmx = a1;
+    a0 = (nodeB[b + 2] - oz) * idz; a1 = (nodeB[b + 5] - oz) * idz;
+    if (a0 > a1) { const q = a0; a0 = a1; a1 = q; }
+    if (a0 > tmin) tmin = a0; if (a1 < tmx) tmx = a1;
+    if (!(tmx >= tmin && tmx >= t0 && tmin <= t1)) continue;
+    const info = nodeI[node * 2 + 1];
+    if (info < 0) {
+      const start = nodeI[node * 2], end = start - info;
+      for (let k = start; k < end; k++) {
+        if (!S.matCore[S.tmat[k]]) continue;
+        const t = k * 12;
+        const e1x = tri[t + 3], e1y = tri[t + 4], e1z = tri[t + 5];
+        const e2x = tri[t + 6], e2y = tri[t + 7], e2z = tri[t + 8];
+        const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x;
+        const det = e1x * px + e1y * py + e1z * pz;
+        if (det > -1e-12 && det < 1e-12) continue;
+        const inv = 1 / det;
+        const sx = ox - tri[t], sy = oy - tri[t + 1], sz = oz - tri[t + 2];
+        const u = (sx * px + sy * py + sz * pz) * inv;
+        if (u < 0 || u > 1) continue;
+        const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+        const v = (dx * qx + dy * qy + dz * qz) * inv;
+        if (v < 0 || u + v > 1) continue;
+        const d = (e2x * qx + e2y * qy + e2z * qz) * inv;
+        if (d > t0 && d <= t1) count++;
+      }
+    } else { stack[sp++] = nodeI[node * 2]; stack[sp++] = node + 1; }
+  }
+  return count;
+}
+
+/**
+ * Is this point part of a core (stairs, lifts, shafts)? True when it is
+ *  - inside a closed core volume (odd number of crossings both up and down), or
+ *  - standing on a flat core patch drawn on the slab (core surface just below), or
+ *  - enclosed by core walls (most horizontal rays hit core geometry first, within 12 m).
+ */
+export function isCore(S, x, y, z, zs) {
+  const up = countCoreHits(S, x, y, z, 1e-7, 1e-7, 1, 1e-6, 1e30);
+  const down = countCoreHits(S, x, y, z, 1e-7, 1e-7, -1, 1e-6, 1e30);
+  if (up % 2 === 1 && down % 2 === 1) return true;
+  if (countCoreHits(S, x, y, z, 1e-7, 1e-7, -1, 1e-6, z - zs + 0.05) > 0) return true;
+  let walls = 0;
+  for (let k = 0; k < 8; k++) {
+    const h = intersect(S, x, y, z, H8[k][0], H8[k][1], 1e-7, 12);
+    if (h >= 0 && S.matCore[S.tmat[h]]) walls++;
+  }
+  return walls >= 6;
+}
 export function classifySensors(S, sensors) {
   const out = new Uint8Array(sensors.count);
   for (let i = 0; i < sensors.count; i++) {
     const x = sensors.x[i], y = sensors.y[i], z = sensors.z[i];
+    if (S.hasCore && isCore(S, x, y, z, sensors.zs[i])) { out[i] = 3; continue; }
     const zs = sensors.zs[i] + 0.02;
     const span = z - zs;
     if (span > 0.01) {

@@ -11,9 +11,10 @@ A browser app that computes the **Daylight Factor (DF)** and natural illuminance
    - **Slab**: surfaces where daylight is measured (the grid is built on upward-facing horizontal faces)
    - **Opaque**: walls, ceilings, context and obstructions, with a **reflectance** (empty = auto by orientation: floors 0.2, walls 0.5, ceilings 0.7)
    - **Glass**: lets light through with a **transmittance** (default 0.70)
+   - **Core (excluded)**: stairs, lifts and shafts. They block light like opaque layers, but the floor area inside them is left out of all results, so percentages refer to usable floor area only. A core can be modelled as a closed volume, as shaft walls (door openings are fine), or as a flat patch drawn on the slab
    - **Ignore**: excluded from the calculation
 
-   Roles and typical reflectances are suggested from layer names (`SLABS`, `Glass`, `Grass`, `Context`…).
+   Roles and typical reflectances are suggested from layer names (`SLABS`, `Glass`, `Core`, `Stairs`, `Lift`, `Grass`, `Context`…).
 3. **Location & building use** (see below).
 4. **Settings**: grid spacing, work plane height, ground reflectance, quality.
 5. **Run**: the calculation uses every CPU core.
@@ -58,7 +59,7 @@ For each floor the app reports the m² and percentage inside each line, mean and
 - **Ground**: Lambertian plane with reflectance ρg lit by the sky.
 - **Glass**: specular transmission with constant τ (no angular dependence, so it slightly overestimates light at grazing angles).
 - **BVH** written from scratch (`src/engine.js`), dependency-free, also usable in Node.
-- **Filters**: points with nothing overhead are treated as outdoor; points inside walls or solids are detected with rays along the 6 axis directions.
+- **Filters**: points with nothing overhead are treated as outdoor; points inside walls or solids are detected with rays along the 6 axis directions; core points are found by ray parity (closed volumes), a downward ray (flat patches) or 8 horizontal rays (shaft walls).
 - Results are lightly smoothed (3×3 average on the grid) to reduce Monte Carlo noise.
 
 Checks (`npm test`): an unobstructed horizontal point gives DF = 100%; an unobstructed vertical surface gives ≈ 49.6% (39.6% sky + 10% ground); the BVH matches brute force.
