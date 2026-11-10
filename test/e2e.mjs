@@ -41,6 +41,7 @@ await p.selectOption('#use','off'); await p.waitForTimeout(400);
 console.log('summary office:', (await p.innerText('#summary')).split('\n').slice(0,8).join(' | '));
 await p.screenshot({ path: 'test/shot_office.png' });
 await p.selectOption('#use','res'); await p.waitForTimeout(300);
+await p.click('#mDF'); await p.waitForTimeout(300); await p.screenshot({ path: 'test/shot_df_bw.png' }); await p.click('#mZone');
 await p.click('#v3d'); await p.selectOption('#level','all'); await p.waitForTimeout(500);
 await p.screenshot({ path: 'test/shot_demo3d.png' });
 await p.fill('#lvNames label:nth-child(1) input', 'Ground floor · Living'); await p.fill('#lvNames label:nth-child(2) input', 'First floor · Bedrooms');
