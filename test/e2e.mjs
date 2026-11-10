@@ -12,7 +12,6 @@ await p.setInputFiles('#epwFile', 'test/sample.epw'); await p.waitForTimeout(300
 console.log('estimate:', await p.textContent('#estimate'));
 await p.screenshot({ path: 'test/shot_model.png' });
 
-await p.fill('#slabT', '0.2');
 await p.click('#run-df');
 await p.waitForFunction(() => window.__daylight.result && window.__daylight.result.df && !document.querySelector('#run-df').classList.contains('busy'), null, { timeout: 180000 });
 console.log('after DF only, sun button:', await p.textContent('#run-sun'), '| status', await p.textContent('#status'));

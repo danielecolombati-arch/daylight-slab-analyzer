@@ -7,7 +7,6 @@ import { EN17037_CAPITALS, parseEPW } from './climate.js';
 import { contourSegments } from './contour.js';
 import { renderExploded } from './exploded.js';
 import { buildSunSamples } from './sun.js';
-import { thinSlabs } from './slabs.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
@@ -328,7 +327,6 @@ function getOpts() {
     eext: parseFloat($('eext').value) || 19200,
     samples, maxBounces,
     indoorOnly: $('indoorOnly').checked,
-    slabT: parseFloat($('slabT').value) > 0 ? parseFloat($('slabT').value) : null,
     north: parseFloat($('north').value) || 0,
     minAlt: clamp(parseFloat($('minAlt').value), 0, 40, 0),
     solidFilter: $('solidFilter').checked,
@@ -355,19 +353,6 @@ function buildSlabTriangles() {
   return { pos: new Float32Array(out), ids: new Int32Array(ids) };
 }
 
-let geomCache = null;
-/** Object positions used for calculation (slabs optionally thinned). */
-function calcObjects() {
-  const t = getOpts().slabT;
-  if (!t) return model.objects;
-  const key = model.name + '|' + t + '|' + model.layers.map((l) => l.role).join(',');
-  if (geomCache && geomCache.key === key) return geomCache.objects;
-  const r = thinSlabs(model.objects, (i) => model.layers[model.objects[i].layer].role === 'slab', t);
-  const objects = model.objects.map((o, i) => ({ layer: o.layer, positions: r.positions[i] }));
-  geomCache = { key, objects, levels: r.levels };
-  return objects;
-}
-
 function buildTraceScene() {
   const mats = { type: [], rho: [], tau: [], core: [] }, matOf = new Map();
   model.layers.forEach((L, i) => {
@@ -379,7 +364,7 @@ function buildTraceScene() {
     mats.tau.push(L.role === 'glass' ? clamp(L.tau, 0, 1, 0.7) : 0);
     mats.core.push(L.role === 'core' ? 1 : 0);
   });
-  const objs = calcObjects();
+  const objs = model.objects;
   let n = 0;
   for (const o of objs) if (matOf.has(o.layer)) n += o.positions.length;
   const positions = new Float32Array(n), triMat = new Int32Array(n / 9);
@@ -428,7 +413,7 @@ function cancel() {
 
 /** Everything that changes the grid or the geometry: if it changes, earlier results are discarded. */
 function gridKey(o) {
-  return JSON.stringify([model.name, model.scale, o.spacing, o.height, o.indoorOnly, o.solidFilter, o.slabT,
+  return JSON.stringify([model.name, model.scale, o.spacing, o.height, o.indoorOnly, o.solidFilter,
     model.layers.map((l) => [l.role, l.rho, l.tau])]);
 }
 
@@ -467,7 +452,7 @@ async function run(kind) {
       }
       if (!keep.length) throw new Error('All points were removed by the filters. Try turning off "Skip points inside walls and solids".');
       const S = subsetSensors(sensors, keep);
-      base = { key, sensors: S, spacing: o.spacing, eext: o.eext, outdoor, solid, opts: o, slabLevels: o.slabT && geomCache ? geomCache.levels : null };
+      base = { key, sensors: S, spacing: o.spacing, eext: o.eext, outdoor, solid, opts: o };
       base.levels = makeLevels(S);
       base.coreZs = coreZs.filter((z) => base.levels.some((l) => z >= l.z - 0.05 && z <= l.max + 0.05));
     }
@@ -536,7 +521,6 @@ async function run(kind) {
       if (base.outdoor) msg += ` · ${fmtInt(base.outdoor)} outdoor skipped`;
       if (base.solid) msg += ` · ${fmtInt(base.solid)} inside solids skipped`;
       if (base.coreZs.length) msg += ` · ${fmtNum(base.coreZs.length * o.spacing * o.spacing, 0)} m² of core excluded`;
-      if (o.slabT) msg += ` · slabs thinned to ${fmtNum(o.slabT, 2)} m`;
       if (prevHadResults) msg += ' · settings changed, earlier results cleared';
     }
     result = base;
@@ -1152,7 +1136,7 @@ $('exRun').onclick = async () => {
   try {
     const L = activeLines(), U = USES[useKey];
     const layers = [];
-    calcObjects().forEach((o) => {
+    model.objects.forEach((o) => {
       const role = model.layers[o.layer].role;
       if (role !== 'ignore') layers.push({ positions: o.positions, kind: role === 'glass' ? 'glass' : 'opaque' });
     });

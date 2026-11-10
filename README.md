@@ -16,8 +16,8 @@ A browser app that computes the **Daylight Factor (DF)** and natural illuminance
 
    Roles and typical reflectances are suggested from layer names (`SLABS`, `Glass`, `Core`, `Stairs`, `Lift`, `Grass`, `Context`…).
 3. **Location & building use** (see below).
-4. **Settings**: grid spacing, work plane height, ground reflectance, quality, and an optional **slab thickness** to test thinner slabs (slabs are thinned from below keeping their top surface; walls and glazing ending under them are extended up, so no gap opens).
-5. **Run**: three separate buttons, **Daylight Factor**, **Sun hours** and **Radiation**. Each runs on its own and reuses the same grid; changing the grid, layers or slab thickness starts a fresh set of results. The calculation uses every CPU core.
+4. **Settings**: grid spacing, work plane height, ground reflectance, quality.
+5. **Run**: three separate buttons, **Daylight Factor**, **Sun hours** and **Radiation**. Each runs on its own and reuses the same grid; changing the grid or layers starts a fresh set of results. The calculation uses every CPU core.
 6. **Results**: daylight map per level (3D or plan), threshold lines, usable area per use, a **rating per floor** (residential: band of the floor's median DF — ✓ generally acceptable or good, ~ moderate, ✗ poor or very dark; office/industrial: ✓ when half the floor reaches the first line), CSV export.
 7. **Exploded axonometric**: all floors stacked in a high-resolution PNG, with level names, area percentages, legend and north arrow.
 
@@ -93,7 +93,6 @@ src/engine.js         BVH, DF path tracing, sensor grid
 src/worker.js         Web Worker for parallel computation
 src/climate.js        location: EN 17037 table, EPW reader, sun position
 src/sun.js            sun samples for sun hours and radiation
-src/slabs.js          slab-thickness test (thin slabs, extend the envelope)
 src/contour.js        threshold lines (marching squares)
 src/exploded.js       exploded axonometric export
 src/demo.js           procedural sample model

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Daylight Factor analysis on interior slabs of Rhino 3dm models, in the browser",
   "scripts": {
-    "test": "node test/bvh.test.mjs && node test/engine.test.mjs && node test/core.test.mjs && node test/sun.test.mjs test/sample.epw && node test/slabs.test.mjs",
+    "test": "node test/bvh.test.mjs && node test/engine.test.mjs && node test/core.test.mjs && node test/sun.test.mjs test/sample.epw",
     "e2e": "node test/e2e.mjs"
   },
   "license": "MIT",
