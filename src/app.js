@@ -669,11 +669,21 @@ function colormap(t, out, pal = CMAP) {
 const USES = {
   res: {
     name: 'Residential', height: 0.85, rest: 'bathrooms, storage, corridors, stairs and shafts',
-    note: 'Targets for dwellings from the UK National Annex to EN 17037 (BRE 209:2022). A room complies when at least half of its floor area is inside its line.',
+    note: 'Daylight Factor bands used as a design guideline (not legal thresholds). The lux each room needs, from the UK National Annex to EN 17037, is listed with the results.',
     lines: [
-      { lux: 100, label: 'Bedroom', color: '#2f6fb0' },
-      { lux: 200, label: 'Kitchen / Living room', color: '#b8336a' },
+      { df: 0.5, label: 'Poor', color: '#8a5aa8' },
+      { df: 1, label: 'Moderate', color: '#2f6fb0' },
+      { df: 2, label: 'Generally acceptable', color: '#2e9b72' },
+      { df: 3, label: 'Good', color: '#e0892b' },
     ],
+    bands: [
+      ['Very dark', 'likely to need artificial lighting'],
+      ['Poor', 'poor natural daylight'],
+      ['Moderate', 'moderate daylight'],
+      ['Generally acceptable', 'generally acceptable daylight'],
+      ['Good', 'good natural daylight'],
+    ],
+    needs: [['Kitchen', 200], ['Living room', 150], ['Bedroom', 100], ['Services (bathrooms, storage, corridors)', null]],
   },
   off: {
     name: 'Office', height: 0.75, rest: 'cores, toilets, archives, plant rooms and storage',
@@ -765,26 +775,39 @@ function renderThrTable() {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td style="width:22px"><input type="checkbox" ${l.on ? 'checked' : ''} style="accent-color:${l.color}"></td>
       <td><span class="lsw" style="border-color:${l.color}"></span>${escapeHtml(l.label)}</td>
-      <td style="text-align:right"><input type="number" min="10" step="10" value="${l.lux}"></td>`;
+      <td style="text-align:right"><input type="number" min="${l.df != null ? 0.1 : 10}" step="${l.df != null ? 0.1 : 10}" value="${l.df != null ? l.df : l.lux}" title="${l.df != null ? 'Daylight Factor %' : 'lux'}"> <span class="hint" style="margin:0">${l.df != null ? '%' : 'lx'}</span></td>`;
     const [cb, inp] = tr.querySelectorAll('input');
     cb.onchange = () => { l.on = cb.checked; if (result) refreshResults(); };
-    inp.onchange = () => { l.lux = Math.max(1, parseFloat(inp.value) || l.lux); if (result) refreshResults(); };
+    inp.onchange = () => {
+      if (l.df != null) l.df = Math.max(0.05, parseFloat(inp.value) || l.df); else l.lux = Math.max(1, parseFloat(inp.value) || l.lux);
+      if (result) refreshResults();
+    };
     tb.appendChild(tr);
   });
 }
 
 function refreshResults() { recolor(); renderStats(); buildContours(); }
 
-function activeLines() { return useLines.filter((l) => l.on).sort((a, b) => a.lux - b.lux); }
+function lineDF(l) { return l.df != null ? l.df : dfOf(l.lux); }
+function thrText(l) { return l.df != null ? `DF ${fmtNum(l.df, l.df % 1 ? 1 : 0)}%` : `${fmtInt(l.lux)} lx`; }
+function activeLines() { return useLines.filter((l) => l.on).sort((a, b) => lineDF(a) - lineDF(b)); }
 const dfOf = (lux) => lux / result.eext * 100;
 
 // Bands between consecutive thresholds, for the zone map
 function useBands() {
   const L = activeLines(), U = USES[useKey];
-  const bands = [{ min: -Infinity, fill: '#cfcac1', label: `Below ${L.length ? fmtInt(L[0].lux) : '–'} lx`, desc: U.rest, short: 'services / core' }];
+  if (U.bands && L.length === U.lines.length) {
+    const vals = L.map(lineDF), fmt = (v) => fmtNum(v, v % 1 ? 1 : 0);
+    return U.bands.map(([name, desc], i) => ({
+      min: i === 0 ? -Infinity : vals[i - 1], fill: i === 0 ? '#cfcac1' : mix(L[i - 1].color, 0.45), color: i === 0 ? '#9e978c' : L[i - 1].color,
+      label: i === 0 ? `DF < ${fmt(vals[0])}%` : i === vals.length ? `DF > ${fmt(vals[i - 1])}%` : `DF ${fmt(vals[i - 1])}–${fmt(vals[i])}%`,
+      desc, short: name,
+    }));
+  }
+  const bands = [{ min: -Infinity, fill: '#cfcac1', label: `Below ${L.length ? thrText(L[0]) : '–'}`, desc: U.rest, short: 'services / core' }];
   L.forEach((l, i) => {
     const fits = L.slice(0, i + 1).map((x) => x.label.split(' (')[0].toLowerCase());
-    bands.push({ min: dfOf(l.lux), fill: mix(l.color, 0.45), label: `≥ ${fmtInt(l.lux)} lx`, desc: 'suits ' + fits.reverse().join(', '), short: l.label.split(' (')[0] });
+    bands.push({ min: lineDF(l), fill: mix(l.color, 0.45), color: l.color, label: `≥ ${thrText(l)}`, desc: 'suits ' + fits.reverse().join(', '), short: l.label.split(' (')[0] });
   });
   return bands;
 }
@@ -815,16 +838,37 @@ function renderStats() {
   const st = areaStats(lv ? lv.idx : all);
   const where = lv ? levelName(result.levels.indexOf(lv)) : (result.levels.length > 1 ? 'All levels' : 'Analysed slab');
   let html = `<div class="sumhead"><div class="t">${where} · ${U.name}</div><div class="m">${fmtNum(st.area, 0)} m² analysed${coreArea(lv) ? ` (+ ${fmtNum(coreArea(lv), 0)} m² core excluded)` : ''} · ${escapeHtml(site.label)} · median diffuse E ${fmtInt(result.eext)} lx</div></div>`;
+  const bandsNow = useBands();
+  if (U.bands && bandsNow.length === U.bands.length) {
+    // exclusive ranges between the DF lines
+    for (let i = bandsNow.length - 1; i >= 0; i--) {
+      const B = bandsNow[i], f = st.frac(B.min) - (i + 1 < bandsNow.length ? st.frac(bandsNow[i + 1].min) : 0);
+      html += `<div class="usebar"><div class="top"><span><span class="lsw" style="border-color:${B.color}"></span><b>${B.short}</b> · ${B.label}</span><span style="font-family:var(--mono)">${fmtNum(f * st.area, 0)} m² · ${Math.round(f * 100)}%</span></div>
+        <div class="track"><div style="width:${f * 100}%;background:${B.color}"></div></div></div>`;
+    }
+    if (U.needs) {
+      html += `<table class="needs"><thead><tr><th>Daylight needed</th><th>lux</th><th>DF here</th><th>floor meeting it</th></tr></thead><tbody>` +
+        U.needs.map(([room, lux]) => lux
+          ? `<tr><td>${room}</td><td>${fmtInt(lux)} lx</td><td>${fmtNum(dfOf(lux), 1)}%</td><td>${Math.round(st.frac(dfOf(lux)) * 100)}%</td></tr>`
+          : `<tr><td>${room}</td><td colspan="3" style="text-align:left;color:var(--muted)">no daylight requirement</td></tr>`).join('') +
+        `</tbody></table><p class="hint" style="margin-top:4px">lux exceeded for half of the daylight hours over at least half of the room (UK National Annex to EN 17037); DF converted with ${fmtInt(result.eext)} lx at ${escapeHtml(site.label)}.</p>`;
+    }
+  } else {
   for (const l of [...L].reverse()) {
-    const f = st.frac(dfOf(l.lux));
-    html += `<div class="usebar"><div class="top"><span><span class="lsw" style="border-color:${l.color}"></span><b>${escapeHtml(l.label.split(' (')[0])}</b> · ≥ ${fmtInt(l.lux)} lx</span><span style="font-family:var(--mono)">${fmtNum(f * st.area, 0)} m² · ${Math.round(f * 100)}%</span></div>
+    const f = st.frac(lineDF(l));
+    html += `<div class="usebar"><div class="top"><span><span class="lsw" style="border-color:${l.color}"></span><b>${escapeHtml(l.label.split(' (')[0])}</b> · ≥ ${thrText(l)}</span><span style="font-family:var(--mono)">${fmtNum(f * st.area, 0)} m² · ${Math.round(f * 100)}%</span></div>
       <div class="track"><div style="width:${f * 100}%;background:${l.color}"></div></div></div>`;
   }
   if (L.length) {
-    const below = 1 - st.frac(dfOf(L[0].lux));
-    html += `<div class="usebar"><div class="top"><span><span class="lsw" style="border-color:#bdb7ad"></span><b>Below ${fmtInt(L[0].lux)} lx</b> · ${U.rest}</span><span style="font-family:var(--mono)">${fmtNum(below * st.area, 0)} m² · ${Math.round(below * 100)}%</span></div>
+    const below = 1 - st.frac(lineDF(L[0]));
+    html += `<div class="usebar"><div class="top"><span><span class="lsw" style="border-color:#bdb7ad"></span><b>Below ${thrText(L[0])}</b> · ${U.rest}</span><span style="font-family:var(--mono)">${fmtNum(below * st.area, 0)} m² · ${Math.round(below * 100)}%</span></div>
       <div class="track"><div style="width:${below * 100}%;background:#bdb7ad"></div></div></div>`;
   }
+  }
+  if (U.bands && bandsNow.length === U.bands.length) {
+    const nd = (U.needs || []).filter((n) => n[1]).map(([r, lux]) => `${r.toLowerCase()} where DF ≥ ${fmtNum(dfOf(lux), 1)}%`).join(', ');
+    html += `<p class="hint" style="margin-top:10px">Coloured lines mark DF ${activeLines().map((l) => fmtNum(l.df, l.df % 1 ? 1 : 0) + '%').join(' / ')}; the fills show the band between them. To meet the room targets here, place ${nd}, with at least half of each room inside that zone; ${U.rest} can go in the darkest areas.</p>`;
+  } else
   html += `<p class="hint" style="margin-top:10px">Each line encloses the area that receives at least that illuminance for half of the daylight hours in a year. Lay out rooms so that at least half of their floor area is inside the right line; areas outside the lines suit ${U.rest}.</p>`;
 
   // informative checks
@@ -843,8 +887,8 @@ function renderStats() {
   const rows = result.levels.map((l, i) => [escapeHtml(levelName(i)), areaStats(l.idx)]);
   if (rows.length > 1) rows.push(['Total', areaStats(all)]);
   const hasCore = result.coreZs && result.coreZs.length;
-  $('stats').innerHTML = `<tr><th></th><th>m²</th>${hasCore ? '<th title="Core area excluded">core</th>' : ''}<th>mean DF</th>${L.map((l) => `<th title="${escapeHtml(l.label)}"><span class="lsw" style="border-color:${l.color};width:10px"></span>≥${fmtInt(l.lux)}</th>`).join('')}</tr>` +
-    rows.map(([nm, e], i) => `<tr><td>${nm}</td><td>${fmtNum(e.area, 0)}</td>${hasCore ? `<td>${fmtNum(coreArea(i < result.levels.length ? result.levels[i] : null), 0)}</td>` : ''}<td>${fmtNum(e.mean, 2)}</td>${L.map((l) => `<td>${Math.round(e.frac(dfOf(l.lux)) * 100)}%</td>`).join('')}</tr>`).join('');
+  $('stats').innerHTML = `<tr><th></th><th>m²</th>${hasCore ? '<th title="Core area excluded">core</th>' : ''}<th>mean DF</th>${L.map((l) => `<th title="${escapeHtml(l.label)}"><span class="lsw" style="border-color:${l.color};width:10px"></span>≥${l.df != null ? fmtNum(l.df, l.df % 1 ? 1 : 0) + '%' : fmtInt(l.lux)}</th>`).join('')}</tr>` +
+    rows.map(([nm, e], i) => `<tr><td>${nm}</td><td>${fmtNum(e.area, 0)}</td>${hasCore ? `<td>${fmtNum(coreArea(i < result.levels.length ? result.levels[i] : null), 0)}</td>` : ''}<td>${fmtNum(e.mean, 2)}</td>${L.map((l) => `<td>${Math.round(e.frac(lineDF(l)) * 100)}%</td>`).join('')}</tr>`).join('');
   if (displayMode === 'zone') renderZoneLegend();
   renderSunStats();
 }
@@ -876,7 +920,7 @@ function renderSunStats() {
 function suggestions(st, L) {
   const t = [];
   if (st.frac(dfOf(750)) > 0.35) t.push('Large areas exceed 750 lx: plan adjustable shading against glare and summer overheating.');
-  if (!L.length || st.frac(dfOf(L[L.length - 1].lux)) >= 0.6) return t;
+  if (!L.length || st.frac(lineDF(L[L.length - 1])) >= 0.6) return t;
   t.push('To bring light deeper, raise the window heads or take windows up to the ceiling (rule of thumb: daylit depth ≈ 2–2.5 × window head height).');
   t.push('Deep areas far from the façades can host services; on the top floor, rooflights or light wells make them usable.');
   t.push('Reduce deep overhangs and balconies in front of main windows and use light interior finishes. You can test this by changing the reflectance in the layer table.');
@@ -890,7 +934,7 @@ function renderZoneLegend() {
   const fr = bands.map((b, i) => (i + 1 < bands.length ? st.frac(b.min) - st.frac(bands[i + 1].min) : st.frac(b.min)));
   fr[0] = 1 - (bands.length > 1 ? st.frac(bands[1].min) : 0);
   $('lgZones').innerHTML = bands.map((b, i) => `<div class="zrow"><i style="background:${b.fill}"></i><span><b>${b.label}</b> <span style="color:var(--muted)">${b.desc}</span></span><span style="font-family:var(--mono)">${Math.round(fr[i] * 100)}%</span></div>`).reverse().join('')
-    + (showLines ? activeLines().map((l) => `<div class="zrow"><i style="background:none;border-top:3px solid ${l.color};height:0;margin-top:5px"></i><span>line ${fmtInt(l.lux)} lx · ${escapeHtml(l.label.split(' (')[0])}</span><span></span></div>`).reverse().join('') : '');
+    + (showLines ? activeLines().map((l) => `<div class="zrow"><i style="background:none;border-top:3px solid ${l.color};height:0;margin-top:5px"></i><span>line ${thrText(l)} · ${escapeHtml(l.label.split(' (')[0])}</span><span></span></div>`).reverse().join('') : '');
 }
 
 // iso-lines per level
@@ -907,7 +951,7 @@ function buildContours() {
       let zsum = 0;
       for (const k of level.idx) { pts.gi.push(Math.round(S.x[k] / h - 0.5)); pts.gj.push(Math.round(S.y[k] / h - 0.5)); pts.v.push(result.df[k]); zsum += S.zs[k]; }
       const z = zsum / level.idx.length + 0.07;
-      const seg = contourSegments(pts, h, dfOf(L.lux));
+      const seg = contourSegments(pts, h, lineDF(L));
       for (let i = 0; i < seg.length; i += 4) pos.push(seg[i], seg[i + 1], z, seg[i + 2], seg[i + 3], z);
     }
     if (!pos.length) continue;
@@ -991,7 +1035,7 @@ function exportRamp() {
   // colours of the current map mode, as a function of DF
   if (displayMode === 'zone') {
     const bands = exportBands(), L = activeLines();
-    const hi = Math.max(1, (L.length ? dfOf(L[L.length - 1].lux) : 2) * 2);
+    const hi = Math.max(1, (L.length ? lineDF(L[L.length - 1]) : 2) * 2);
     const c = new THREE.Color();
     return { lo: 0, hi, fn: (t) => { c.set(bands[bandOf(t * hi, bands)].fill); const o = c.getRGB({}, THREE.SRGBColorSpace); return [o.r, o.g, o.b]; } };
   }
@@ -1001,7 +1045,7 @@ function exportRamp() {
 }
 
 function exportLegend() {
-  const L = activeLines(), lineItems = $('exLines').checked ? L.map((l) => ({ type: 'line', color: l.color, label: `${fmtInt(l.lux)} lx line · ${l.label.split(' (')[0]}` })).reverse() : [];
+  const L = activeLines(), lineItems = $('exLines').checked ? L.map((l) => ({ type: 'line', color: l.color, label: `${thrText(l)} line · ${l.label.split(' (')[0]}` })).reverse() : [];
   if (displayMode === 'zone') {
     const bands = exportBands();
     return { title: 'Daylight · lux exceeded for 50% of daylight hours',
@@ -1040,13 +1084,16 @@ $('exRun').onclick = async () => {
         let mx = 0; for (const k of lv.idx) mx = Math.max(mx, M.values[k]);
         return [`${fmtNum(st.area, 0)} m² analysed`, `mean ${fmtInt(meanOf(M.values, lv.idx))} kWh/m²`, `peak ${fmtInt(mx)} kWh/m²`];
       }
-      return [`${fmtNum(st.area, 0)} m² analysed`, ...[...L].reverse().map((l) => ({ color: l.color, text: `${Math.round(st.frac(dfOf(l.lux)) * 100)}% ≥ ${fmtInt(l.lux)} lx · ${l.label.split(' (')[0]}` }))];
+      const BB = useBands();
+      if (USES[useKey].bands && BB.length === USES[useKey].bands.length)
+        return [`${fmtNum(st.area, 0)} m² analysed`, ...BB.map((B, i) => ({ color: B.color, text: `${Math.round((st.frac(B.min) - (i + 1 < BB.length ? st.frac(BB[i + 1].min) : 0)) * 100)}% ${B.short.toLowerCase()} · ${B.label}` })).reverse()];
+      return [`${fmtNum(st.area, 0)} m² analysed`, ...[...L].reverse().map((l) => ({ color: l.color, text: `${Math.round(st.frac(lineDF(l)) * 100)}% ≥ ${thrText(l)} · ${l.label.split(' (')[0]}` }))];
     });
     const viewDir = camera.position.clone().sub(controls.target);
     const out = await renderExploded({
       layers, sensors: result.sensors, df: M ? M.values : result.df, levels: result.levels, spacing: result.spacing, north: result.opts.north || 0,
       names: result.levels.map((_, i) => levelName(i)), stats,
-      ramp: exportRamp(), lines: $('exLines').checked && !sunMode ? L.map((l) => ({ df: displayMode === 'lux' ? l.lux : dfOf(l.lux), color: l.color })) : [],
+      ramp: exportRamp(), lines: $('exLines').checked && !sunMode ? L.map((l) => ({ df: displayMode === 'lux' ? lineDF(l) * result.eext / 100 : lineDF(l), color: l.color })) : [],
       gap: Math.max(0, parseFloat($('exGap').value) || 0), width: parseInt($('exWidth').value, 10), roof: $('exRoof').checked, slabs: $('exSlabs').checked,
       viewDir, legend: exportLegend(),
       title: baseName(), subtitle: sunMode ? `${result.sunMeta.site} · ${U.name} · ${M.title} · True North ${fmtNum(result.opts.north || 0, 0)}°` : `${site.label} · ${U.name} · CIE overcast sky, median diffuse illuminance ${fmtInt(result.eext)} lx (EN 17037)`,

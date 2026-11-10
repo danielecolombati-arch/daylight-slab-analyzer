@@ -42,9 +42,9 @@ The Daylight Factor does not depend on location: it is a ratio under a standard 
 
 The building use sets the work plane height and the **threshold lines** drawn on each floor plan:
 
-| Use | Lines (lux exceeded for half of daylight hours) | Source |
+| Use | Lines | Source |
 |---|---|---|
-| Residential | 100 bedroom · 200 kitchen / living room | UK National Annex to EN 17037 (BRE 209:2022) |
+| Residential | DF 0.5% · 1% · 2% · 3% → very dark / poor / moderate / generally acceptable / good | design guideline; room targets (kitchen 200 lx, living room 150 lx, bedroom 100 lx) from the UK National Annex to EN 17037 are listed with their DF at the site |
 | Office | 300 office · 500 continuous desk work | EN 17037 minimum and medium levels |
 | Industrial | 300 · 500 · 750 | EN 17037 minimum, medium and high levels |
 
