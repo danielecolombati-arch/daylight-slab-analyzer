@@ -7,6 +7,7 @@ import { EN17037_CAPITALS, parseEPW } from './climate.js';
 import { contourSegments } from './contour.js';
 import { renderExploded } from './exploded.js';
 import { buildSunSamples } from './sun.js';
+import { thinSlabs } from './slabs.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
@@ -261,6 +262,7 @@ const SUBS = {
 };
 let subKey = { sun: 'mar', rad: 'year' };
 function setMode(m) {
+  if (result && !metricAvailable(m)) return;
   displayMode = m;
   for (const [k, id] of Object.entries(MODES)) $(id).classList.toggle('on', k === m);
   const sub = $('sub');
@@ -326,7 +328,7 @@ function getOpts() {
     eext: parseFloat($('eext').value) || 19200,
     samples, maxBounces,
     indoorOnly: $('indoorOnly').checked,
-    doSun: $('doSun').checked,
+    slabT: parseFloat($('slabT').value) > 0 ? parseFloat($('slabT').value) : null,
     north: parseFloat($('north').value) || 0,
     minAlt: clamp(parseFloat($('minAlt').value), 0, 40, 0),
     solidFilter: $('solidFilter').checked,
@@ -353,6 +355,19 @@ function buildSlabTriangles() {
   return { pos: new Float32Array(out), ids: new Int32Array(ids) };
 }
 
+let geomCache = null;
+/** Object positions used for calculation (slabs optionally thinned). */
+function calcObjects() {
+  const t = getOpts().slabT;
+  if (!t) return model.objects;
+  const key = model.name + '|' + t + '|' + model.layers.map((l) => l.role).join(',');
+  if (geomCache && geomCache.key === key) return geomCache.objects;
+  const r = thinSlabs(model.objects, (i) => model.layers[model.objects[i].layer].role === 'slab', t);
+  const objects = model.objects.map((o, i) => ({ layer: o.layer, positions: r.positions[i] }));
+  geomCache = { key, objects, levels: r.levels };
+  return objects;
+}
+
 function buildTraceScene() {
   const mats = { type: [], rho: [], tau: [], core: [] }, matOf = new Map();
   model.layers.forEach((L, i) => {
@@ -364,11 +379,12 @@ function buildTraceScene() {
     mats.tau.push(L.role === 'glass' ? clamp(L.tau, 0, 1, 0.7) : 0);
     mats.core.push(L.role === 'core' ? 1 : 0);
   });
+  const objs = calcObjects();
   let n = 0;
-  for (const o of model.objects) if (matOf.has(o.layer)) n += o.positions.length;
+  for (const o of objs) if (matOf.has(o.layer)) n += o.positions.length;
   const positions = new Float32Array(n), triMat = new Int32Array(n / 9);
   let off = 0;
-  for (const o of model.objects) {
+  for (const o of objs) {
     if (!matOf.has(o.layer)) continue;
     positions.set(o.positions, off);
     triMat.fill(matOf.get(o.layer), off / 9, (off + o.positions.length) / 9);
@@ -385,30 +401,52 @@ function updateEstimate() {
   for (let i = 0; i < slab.pos.length; i += 9) area += horizontalArea(slab.pos.subarray(i, i + 9));
   const pts = area / (o.spacing * o.spacing);
   const cores = navigator.hardwareConcurrency || 4;
-  const sec = (pts * (o.samples * (1.6 + o.maxBounces * 0.12) + (o.doSun ? 1500 : 0))) / (1.2e6 * cores);
+  const sec = (pts * o.samples * (1.6 + o.maxBounces * 0.12)) / (1.2e6 * cores);
   $('estimate').innerHTML = slab.pos.length
-    ? `≈ ${fmtInt(pts)} points on ${fmtNum(area, 0)} m² of slabs · estimated time ${sec < 60 ? Math.max(1, Math.round(sec)) + ' s' : Math.round(sec / 60) + ' min'} (${cores} cores)`
+    ? `≈ ${fmtInt(pts)} points on ${fmtNum(area, 0)} m² of slabs · Daylight Factor ≈ ${sec < 60 ? Math.max(1, Math.round(sec)) + ' s' : Math.round(sec / 60) + ' min'} (${cores} cores); sun hours and radiation take about as long again each`
     : `<span class="warn" style="display:block">No layer set as <b>Slab</b> with horizontal surfaces.</span>`;
 }
-for (const id of ['spacing', 'quality', 'doSun']) $(id).addEventListener('input', updateEstimate);
+for (const id of ['spacing', 'quality']) $(id).addEventListener('input', updateEstimate);
 
 // ------------------------------------------------------------------ run
-let workers = [], running = false;
-$('run').onclick = () => (running ? cancel() : run());
+let workers = [], running = false, runningKind = null;
+const RUN_LABEL = { df: 'Daylight Factor', sun: 'Sun hours', rad: 'Radiation' };
+for (const k of Object.keys(RUN_LABEL)) $('run-' + k).onclick = () => (running ? (runningKind === k && cancel()) : run(k));
+function setRunButtons() {
+  for (const k of Object.keys(RUN_LABEL)) {
+    const b = $('run-' + k);
+    b.textContent = running && runningKind === k ? 'Cancel' : RUN_LABEL[k] + (result && result[k === 'sun' ? 'sun' : k === 'rad' ? 'rad' : 'df'] ? ' ✓' : '');
+    b.classList.toggle('busy', running && runningKind === k);
+    b.disabled = running && runningKind !== k;
+  }
+}
 
 function cancel() {
   workers.forEach((w) => w.terminate()); workers = [];
-  running = false; $('run').textContent = 'Run Daylight Factor'; setStatus('cancelled'); setBar(0);
+  running = false; runningKind = null; setRunButtons(); setStatus('cancelled'); setBar(0);
 }
 
-async function run() {
+/** Everything that changes the grid or the geometry: if it changes, earlier results are discarded. */
+function gridKey(o) {
+  return JSON.stringify([model.name, model.scale, o.spacing, o.height, o.indoorOnly, o.solidFilter, o.slabT,
+    model.layers.map((l) => [l.role, l.rho, l.tau])]);
+}
+
+async function run(kind) {
   const o = getOpts();
-  const slab = buildSlabTriangles();
-  if (!slab.pos.length) { setStatus('no slab to analyse'); return; }
-  const sensors = makeSensorGrid(slab.pos, slab.ids, o.spacing, o.height);
-  if (!sensors.count) { setStatus('empty grid: reduce the grid spacing'); return; }
-  if (sensors.count > 400000) { setStatus(`too many points (${fmtInt(sensors.count)}): increase the grid spacing`); return; }
-  running = true; $('run').textContent = 'Cancel'; clearResults();
+  if (kind !== 'df' && site.lat == null) { setStatus('set a location first (step 3)'); return; }
+  if (kind === 'rad' && !(site.hourly && site.hourly.length)) { setStatus('radiation needs an EPW weather file: upload it in step 3'); return; }
+  const key = gridKey(o), fresh = !result || result.key !== key;
+  prevHadResults = fresh && !!result;
+  let sensors = null;
+  if (fresh) {
+    const slab = buildSlabTriangles();
+    if (!slab.pos.length) { setStatus('no slab to analyse'); return; }
+    sensors = makeSensorGrid(slab.pos, slab.ids, o.spacing, o.height);
+    if (!sensors.count) { setStatus('empty grid: reduce the grid spacing'); return; }
+    if (sensors.count > 400000) { setStatus(`too many points (${fmtInt(sensors.count)}): increase the grid spacing`); return; }
+  }
+  running = true; runningKind = kind; setRunButtons();
   const t0 = performance.now();
   const sc = buildTraceScene();
   const nW = Math.max(1, Math.min(16, (navigator.hardwareConcurrency || 4)));
@@ -416,85 +454,104 @@ async function run() {
   workers = Array.from({ length: nW }, () => new Worker(new URL('./worker.js', import.meta.url), { type: 'module' }));
   try {
     await Promise.all(workers.map((w) => call(w, { type: 'init', ...sc }, 'ready')));
-    // classify on worker 0
-    const { cls } = await call(workers[0], { type: 'classify', sensors }, 'classified');
-    const keep = [], coreZs = [];
-    let outdoor = 0, solid = 0;
-    for (let i = 0; i < sensors.count; i++) {
-      if (cls[i] === 3) { coreZs.push(sensors.zs[i]); continue; }
-      if (cls[i] === 0 && o.indoorOnly) { outdoor++; continue; }
-      if (cls[i] === 2 && o.solidFilter) { solid++; continue; }
-      keep.push(i);
-    }
-    if (!keep.length) throw new Error('All points were removed by the filters. Try turning off "Skip points inside walls and solids".');
-    const S = subsetSensors(sensors, keep);
-    // job queue
-    const CH = Math.max(16, Math.min(256, Math.ceil(S.count / (nW * 12))));
-    const df = new Float32Array(S.count);
-    let next = 0, done = 0, seed = 12345;
-    setStatus(`computing ${fmtInt(S.count)} points…`);
-    await Promise.all(workers.map(async (w) => {
-      while (running && next < S.count) {
-        const a = next, b = Math.min(S.count, next + CH); next = b;
-        const r = await call(w, { type: 'df', jobId: a, x: S.x.slice(a, b), y: S.y.slice(a, b), z: S.z.slice(a, b), opts: o, seed: seed++ }, 'result');
-        df.set(r.values, a);
-        done += b - a;
-        setBar(done / S.count);
-        const el = (performance.now() - t0) / 1000, eta = el / done * (S.count - done);
-        setStatus(`computing ${fmtInt(done)} / ${fmtInt(S.count)} points · ${eta > 1 ? '~' + fmtDur(eta) + ' left' : 'almost done'}`);
+    let base = result;
+    if (fresh) {
+      const { cls } = await call(workers[0], { type: 'classify', sensors }, 'classified');
+      const keep = [], coreZs = [];
+      let outdoor = 0, solid = 0;
+      for (let i = 0; i < sensors.count; i++) {
+        if (cls[i] === 3) { coreZs.push(sensors.zs[i]); continue; }
+        if (cls[i] === 0 && o.indoorOnly) { outdoor++; continue; }
+        if (cls[i] === 2 && o.solidFilter) { solid++; continue; }
+        keep.push(i);
       }
-    }));
-    if (!running) return;
-    // ---- direct sun + radiation
-    let sunRaw = null, sunInfo = null;
-    if (o.doSun && site.lat != null) {
-      sunInfo = buildSunSamples({ lat: site.lat, lon: site.lon, tz: site.tz, hourly: site.hourly, north: o.north, minAlt: o.minAlt });
-      const G = sunInfo.G, nd = sunInfo.dirs.length / 3;
-      sunRaw = new Float32Array(S.count * G);
-      const CH2 = Math.max(8, Math.min(128, Math.ceil(S.count / (nW * 16))));
-      let next2 = 0, done2 = 0; const t1 = performance.now();
+      if (!keep.length) throw new Error('All points were removed by the filters. Try turning off "Skip points inside walls and solids".');
+      const S = subsetSensors(sensors, keep);
+      base = { key, sensors: S, spacing: o.spacing, eext: o.eext, outdoor, solid, opts: o, slabLevels: o.slabT && geomCache ? geomCache.levels : null };
+      base.levels = makeLevels(S);
+      base.coreZs = coreZs.filter((z) => base.levels.some((l) => z >= l.z - 0.05 && z <= l.max + 0.05));
+    }
+    const S = base.sensors;
+    base.opts = { ...base.opts, north: o.north, minAlt: o.minAlt, samples: o.samples, maxBounces: o.maxBounces, groundRho: o.groundRho };
+
+    // generic chunked job runner
+    const runJobs = async (label, make, expect, G, onChunk) => {
+      const CH = Math.max(8, Math.min(256, Math.ceil(S.count / (nW * 14))));
+      let next = 0, done = 0; const t1 = performance.now();
       await Promise.all(workers.map(async (w) => {
-        while (running && next2 < S.count) {
-          const a = next2, b = Math.min(S.count, next2 + CH2); next2 = b;
-          const r = await call(w, { type: 'sun', jobId: a, x: S.x.slice(a, b), y: S.y.slice(a, b), z: S.z.slice(a, b), dirs: sunInfo.dirs, w: sunInfo.w, binary: sunInfo.binary, G }, 'sunresult');
-          sunRaw.set(r.values, a * G);
-          done2 += b - a; setBar(done2 / S.count);
-          const el = (performance.now() - t1) / 1000, eta = el / done2 * (S.count - done2);
-          setStatus(`sun & radiation ${fmtInt(done2)} / ${fmtInt(S.count)} points (${fmtInt(nd)} sun positions) · ${eta > 1 ? '~' + fmtDur(eta) + ' left' : 'almost done'}`);
+        while (running && next < S.count) {
+          const a = next, b = Math.min(S.count, next + CH); next = b;
+          const r = await call(w, make(a, b), expect);
+          onChunk(a, r.values);
+          done += b - a; setBar(done / S.count);
+          const el = (performance.now() - t1) / 1000, eta = el / done * (S.count - done);
+          setStatus(`${label} ${fmtInt(done)} / ${fmtInt(S.count)} points · ${eta > 1 ? '~' + fmtDur(eta) + ' left' : 'almost done'}`);
         }
       }));
-      if (!running) return;
-    }
-    result = { sensors: S, df, spacing: o.spacing, eext: o.eext, outdoor, solid, coreZs, opts: o };
-    result.levels = makeLevels(S);
-    result.coreZs = coreZs.filter((z) => result.levels.some((l) => z >= l.z - 0.05 && z <= l.max + 0.05)); // ignore roofs/outdoor
-    result.raw = df; result.df = smooth(S, df, o.spacing);
-    if (sunRaw) {
-      const G = sunInfo.G, col = (g) => { const a = new Float32Array(S.count); for (let i = 0; i < S.count; i++) a[i] = sunRaw[i * G + g]; return a; };
-      result.sun = { mar: smooth(S, col(0), o.spacing), jun: smooth(S, col(1), o.spacing), dec: smooth(S, col(2), o.spacing), year: smooth(S, col(3), o.spacing) };
-      if (sunInfo.hasRad) {
-        const rad = (g, dif) => { const d = col(g); for (let i = 0; i < S.count; i++) d[i] = (d[i] + df[i] / 100 * dif) / 1000; return smooth(S, d, o.spacing); };
-        result.rad = { year: rad(4, sunInfo.diffuse.year), summer: rad(5, sunInfo.diffuse.summer), winter: rad(6, sunInfo.diffuse.winter) };
+      return running;
+    };
+    const dfJob = (opts) => (a, b) => ({ type: 'df', jobId: a, x: S.x.slice(a, b), y: S.y.slice(a, b), z: S.z.slice(a, b), opts, seed: 12345 + a });
+
+    if (kind === 'df') {
+      const df = new Float32Array(S.count);
+      if (!(await runJobs('Daylight Factor', dfJob(o), 'result', 1, (a, v) => df.set(v, a)))) return;
+      base.raw = df; base.df = smooth(S, df, o.spacing); base.eext = o.eext;
+      const sorted = Float32Array.from(base.df).sort();
+      base.dfMax = Math.max(1, niceCeil(Math.min(sorted[Math.floor(sorted.length * 0.95)] || 5, 10)));
+    } else {
+      const smp = buildSunSamples({ lat: site.lat, lon: site.lon, tz: site.tz, hourly: kind === 'rad' ? site.hourly : null, north: o.north, minAlt: o.minAlt });
+      const G = smp.G;
+      // keep only the directions this analysis needs
+      const want = kind === 'sun' ? [0, 1, 2, 3] : [4, 5, 6];
+      const di = [], wi = [];
+      for (let k = 0; k < smp.dirs.length / 3; k++) {
+        if (!want.some((g) => smp.w[k * G + g] > 0)) continue;
+        di.push(smp.dirs[k * 3], smp.dirs[k * 3 + 1], smp.dirs[k * 3 + 2]);
+        for (let g = 0; g < G; g++) wi.push(want.includes(g) ? smp.w[k * G + g] : 0);
       }
-      result.sunMeta = { site: site.label, lat: site.lat, north: o.north, minAlt: o.minAlt, hasRad: sunInfo.hasRad, south: site.lat < 0 };
+      const dirs = Float32Array.from(di), w = Float32Array.from(wi);
+      const raw = new Float32Array(S.count * G);
+      const label = kind === 'sun' ? `Sun hours (${fmtInt(dirs.length / 3)} sun positions)` : `Radiation (${fmtInt(dirs.length / 3)} sun positions)`;
+      if (!(await runJobs(label, (a, b) => ({ type: 'sun', jobId: a, x: S.x.slice(a, b), y: S.y.slice(a, b), z: S.z.slice(a, b), dirs, w, binary: smp.binary, G }), 'sunresult', G, (a, v) => raw.set(v, a * G)))) return;
+      const col = (g) => { const arr = new Float32Array(S.count); for (let i = 0; i < S.count; i++) arr[i] = raw[i * G + g]; return arr; };
+      const meta = { site: site.label, lat: site.lat, north: o.north, minAlt: o.minAlt };
+      if (kind === 'sun') {
+        base.sun = { mar: smooth(S, col(0), o.spacing), jun: smooth(S, col(1), o.spacing), dec: smooth(S, col(2), o.spacing), year: smooth(S, col(3), o.spacing) };
+        base.sunMeta = meta;
+      } else {
+        // diffuse part: Daylight Factor × diffuse horizontal radiation; quick sky calculation if DF was not run
+        let sky = base.raw;
+        if (!sky) {
+          sky = new Float32Array(S.count);
+          if (!(await runJobs('Radiation · diffuse sky', dfJob({ ...o, samples: 64, maxBounces: 3 }), 'result', 1, (a, v) => sky.set(v, a)))) return;
+        }
+        const rad = (g, dif) => { const d = col(g); for (let i = 0; i < S.count; i++) d[i] = (d[i] + sky[i] / 100 * dif) / 1000; return smooth(S, d, o.spacing); };
+        base.rad = { year: rad(4, smp.diffuse.year), summer: rad(5, smp.diffuse.summer), winter: rad(6, smp.diffuse.winter) };
+        base.radMeta = meta;
+      }
     }
     const secs = (performance.now() - t0) / 1000;
-    let msg = `done in ${fmtDur(secs)} · ${fmtInt(S.count)} points`;
-    if (outdoor) msg += ` · ${fmtInt(outdoor)} outdoor skipped`;
-    if (solid) msg += ` · ${fmtInt(solid)} inside solids skipped`;
-    if (result.coreZs.length) msg += ` · ${fmtNum(result.coreZs.length * o.spacing * o.spacing, 0)} m² of core excluded`;
-    if (o.doSun && result.sun && !result.rad) msg += ' · radiation skipped (no EPW)';
+    let msg = `${RUN_LABEL[kind]} done in ${fmtDur(secs)} · ${fmtInt(S.count)} points`;
+    if (fresh) {
+      if (base.outdoor) msg += ` · ${fmtInt(base.outdoor)} outdoor skipped`;
+      if (base.solid) msg += ` · ${fmtInt(base.solid)} inside solids skipped`;
+      if (base.coreZs.length) msg += ` · ${fmtNum(base.coreZs.length * o.spacing * o.spacing, 0)} m² of core excluded`;
+      if (o.slabT) msg += ` · slabs thinned to ${fmtNum(o.slabT, 2)} m`;
+      if (prevHadResults) msg += ' · settings changed, earlier results cleared';
+    }
+    result = base;
+    if (fresh) showResults(); else refreshAfterRun();
+    setMode(kind === 'df' ? 'zone' : kind);
     setStatus(msg);
-    if (solid > 0.4 * sensors.count) setStatus(msg + ' ⚠ many points skipped: the model normals may be flipped');
-    showResults();
   } catch (err) {
     console.error(err);
     setStatus('error: ' + (err.message || err));
   } finally {
     workers.forEach((w) => w.terminate()); workers = [];
-    running = false; $('run').textContent = 'Run Daylight Factor';
+    running = false; runningKind = null; setRunButtons();
   }
 }
+let prevHadResults = false;
 
 function call(w, msg, expect) {
   return new Promise((res, rej) => {
@@ -569,22 +626,24 @@ function showResults() {
   const sel = $('level');
   sel.innerHTML = '<option value="all">All levels</option>' + result.levels.map((l, i) => `<option value="${i}">${levelName(i)}</option>`).join('');
   if (result.levels.length > 1) sel.value = '0';
-  // default scale
-  const sorted = Float32Array.from(result.df).sort();
-  const p95 = sorted[Math.floor(sorted.length * 0.95)] || 5;
-  result.dfMax = Math.max(1, niceCeil(Math.min(p95, 10)));
   syncLegendRange();
   ghost = true; $('ghost').textContent = 'Model: transparent'; styleModel();
   $('legend').style.display = 'block';
   $('s-results').classList.remove('disabled'); $('s-export').classList.remove('disabled');
   levelNames = result.levels.map(() => '');
-  $('mSun').disabled = !result.sun; $('mRad').disabled = !result.rad;
-  if ((displayMode === 'sun' && !result.sun) || (displayMode === 'rad' && !result.rad)) setMode('zone');
-  $('sunBox').hidden = !result.sun;
+  updateModeButtons();
   renderLevelNames();
   applyLevel();
   setSeg('vPlan', 'v3d'); fitCamera('plan');
 }
+
+function metricAvailable(m) { return m === 'sun' ? !!result.sun : m === 'rad' ? !!result.rad : !!result.df; }
+function updateModeButtons() {
+  for (const id of ['mZone', 'mDF', 'mLux']) $(id).disabled = !result.df;
+  $('mSun').disabled = !result.sun; $('mRad').disabled = !result.rad;
+  $('sunBox').hidden = !(result.sun || result.rad);
+}
+function refreshAfterRun() { updateModeButtons(); applyLevel(); }
 
 function syncLegendRange() {
   if (!result || displayMode === 'zone') return;
@@ -626,6 +685,7 @@ function applyLevel() {
 
 function recolor() {
   if (!result || !cells) return;
+  if (!metricAvailable(displayMode)) return;
   const c = new THREE.Color();
   const zoneMode = displayMode === 'zone';
   $('lgZones').style.display = zoneMode ? '' : 'none';
@@ -821,6 +881,19 @@ function coreArea(lv) {
   return result.coreZs.filter((z) => z >= lv.z - 0.05 && z <= lv.max + 0.05).length * h2;
 }
 
+/** Daylight rating of a floor: band of its median DF (residential) or share meeting the first use line. */
+function floorRating(st) {
+  const U = USES[useKey], B = useBands(), L = activeLines();
+  if (U.bands && B.length === U.bands.length) {
+    const k = bandOf(st.med, B);
+    return { label: B[k].short, cls: k >= 3 ? 'ok' : k === 2 ? 'mid' : 'ko', pass: k >= 3, why: `median DF ${fmtNum(st.med, 2)}% → ${B[k].label}` };
+  }
+  if (!L.length) return { label: '–', cls: 'mid', pass: false, why: '' };
+  const f = st.frac(lineDF(L[0])), name = L[0].label.split(' (')[0];
+  return { label: f >= 0.5 ? 'Good' : f >= 0.4 ? 'Borderline' : 'Not enough', cls: f >= 0.5 ? 'ok' : f >= 0.4 ? 'mid' : 'ko', pass: f >= 0.5,
+    why: `${Math.round(f * 100)}% of the floor ≥ ${thrText(L[0])} (${name}); 50% needed` };
+}
+
 function areaStats(idx) {
   const { df, spacing } = result;
   const n = idx.length; if (!n) return null;
@@ -833,11 +906,18 @@ function areaStats(idx) {
 
 function renderStats() {
   if (!result) return;
+  if (!result.df) {
+    $('summary').innerHTML = '<div class="sumhead"><div class="t">Daylight Factor not calculated yet</div><div class="m">Press “Daylight Factor” to add it; it reuses the same grid.</div></div>';
+    $('stats').innerHTML = '';
+    renderSunStats();
+    return;
+  }
   const lv = currentLevel(), U = USES[useKey], L = activeLines();
   const all = Array.from({ length: result.sensors.count }, (_, i) => i);
   const st = areaStats(lv ? lv.idx : all);
   const where = lv ? levelName(result.levels.indexOf(lv)) : (result.levels.length > 1 ? 'All levels' : 'Analysed slab');
-  let html = `<div class="sumhead"><div class="t">${where} · ${U.name}</div><div class="m">${fmtNum(st.area, 0)} m² analysed${coreArea(lv) ? ` (+ ${fmtNum(coreArea(lv), 0)} m² core excluded)` : ''} · ${escapeHtml(site.label)} · median diffuse E ${fmtInt(result.eext)} lx</div></div>`;
+  const rt = floorRating(st);
+  let html = `<div class="sumhead"><div class="t">${where} · ${U.name} <span class="pill ${rt.cls}" title="${escapeHtml(rt.why)}" style="margin-left:6px">${rt.pass ? '✓' : rt.cls === 'mid' ? '~' : '✗'} ${rt.label}</span></div><div class="m">${fmtNum(st.area, 0)} m² analysed${coreArea(lv) ? ` (+ ${fmtNum(coreArea(lv), 0)} m² core excluded)` : ''} · ${escapeHtml(site.label)} · median diffuse E ${fmtInt(result.eext)} lx</div></div>`;
   const bandsNow = useBands();
   if (U.bands && bandsNow.length === U.bands.length) {
     // exclusive ranges between the DF lines
@@ -887,8 +967,9 @@ function renderStats() {
   const rows = result.levels.map((l, i) => [escapeHtml(levelName(i)), areaStats(l.idx)]);
   if (rows.length > 1) rows.push(['Total', areaStats(all)]);
   const hasCore = result.coreZs && result.coreZs.length;
-  $('stats').innerHTML = `<tr><th></th><th>m²</th>${hasCore ? '<th title="Core area excluded">core</th>' : ''}<th>mean DF</th>${L.map((l) => `<th title="${escapeHtml(l.label)}"><span class="lsw" style="border-color:${l.color};width:10px"></span>≥${l.df != null ? fmtNum(l.df, l.df % 1 ? 1 : 0) + '%' : fmtInt(l.lux)}</th>`).join('')}</tr>` +
-    rows.map(([nm, e], i) => `<tr><td>${nm}</td><td>${fmtNum(e.area, 0)}</td>${hasCore ? `<td>${fmtNum(coreArea(i < result.levels.length ? result.levels[i] : null), 0)}</td>` : ''}<td>${fmtNum(e.mean, 2)}</td>${L.map((l) => `<td>${Math.round(e.frac(lineDF(l)) * 100)}%</td>`).join('')}</tr>`).join('');
+  $('stats').innerHTML = `<tr><th></th><th>m²</th>${hasCore ? '<th title="Core area excluded">core</th>' : ''}<th>mean DF</th><th title="Daylight rating of the floor">rating</th>${L.map((l) => `<th title="${escapeHtml(l.label)}"><span class="lsw" style="border-color:${l.color};width:10px"></span>≥${l.df != null ? fmtNum(l.df, l.df % 1 ? 1 : 0) + '%' : fmtInt(l.lux)}</th>`).join('')}</tr>` +
+    rows.map(([nm, e], i) => `<tr><td>${nm}</td><td>${fmtNum(e.area, 0)}</td>${hasCore ? `<td>${fmtNum(coreArea(i < result.levels.length ? result.levels[i] : null), 0)}</td>` : ''}<td>${fmtNum(e.mean, 2)}</td><td>${(() => { const r = floorRating(e); return `<span class="pill ${r.cls}" title="${escapeHtml(r.why)}">${r.pass ? '✓' : r.cls === 'mid' ? '~' : '✗'} ${r.label}</span>`; })()}</td>${L.map((l) => `<td>${Math.round(e.frac(lineDF(l)) * 100)}%</td>`).join('')}</tr>`).join('') +
+    `<tr><td colspan="${4 + (hasCore ? 1 : 0) + L.length}" style="text-align:left;font-family:inherit;color:var(--muted);font-size:11px;border-top:none;padding-top:6px">${USES[useKey].bands ? 'Rating = band of the floor’s median DF (half of the floor is at least that bright): ✓ generally acceptable or good, ~ moderate, ✗ poor or very dark.' : 'Rating: ✓ when at least half of the floor reaches the first line.'}</td></tr>`;
   if (displayMode === 'zone') renderZoneLegend();
   renderSunStats();
 }
@@ -897,24 +978,26 @@ function renderStats() {
 function meanOf(arr, idx) { let s = 0; for (const k of idx) s += arr[k]; return idx.length ? s / idx.length : 0; }
 function fracAbove(arr, idx, t) { let n = 0; for (const k of idx) if (arr[k] >= t) n++; return idx.length ? n / idx.length : 0; }
 function renderSunStats() {
-  if (!result || !result.sun) return;
+  if (!result || !(result.sun || result.rad)) return;
   const lv = currentLevel(), all = Array.from({ length: result.sensors.count }, (_, i) => i), idx = lv ? lv.idx : all;
-  const S = result.sun, R = result.rad, M = result.sunMeta;
+  const S = result.sun, R = result.rad, M = result.sunMeta || result.radMeta;
   const where = lv ? levelName(result.levels.indexOf(lv)) : 'All levels';
   let h = `<div class="hint" style="margin:0">${escapeHtml(where)} · ${escapeHtml(M.site)} · True North ${fmtNum(M.north, 0)}° · direct sun through glazing, ${fmtInt(result.sensors.count)} points</div>`;
-  h += `<div class="mini"><div><b>${fmtNum(meanOf(S.mar, idx), 1)} h</b><span>21 March</span></div><div><b>${fmtNum(meanOf(S.jun, idx), 1)} h</b><span>21 June</span></div><div><b>${fmtNum(meanOf(S.dec, idx), 1)} h</b><span>21 December</span></div><div><b>${fmtInt(meanOf(S.year, idx))} h</b><span>whole year</span></div></div>`;
-  const f15 = fracAbove(S.mar, idx, 1.5), f3 = fracAbove(S.mar, idx, 3), f4 = fracAbove(S.mar, idx, 4), fdec0 = 1 - fracAbove(S.dec, idx, 0.05);
-  h += `<ul class="checks">
-    <li><span class="ic mid">i</span><span><b>EN 17037 sunlight (21 March${M.minAlt ? `, sun above ${fmtNum(M.minAlt, 0)}°` : ''}):</b> ${Math.round(f15 * 100)}% of the floor gets ≥ 1.5 h (minimum), ${Math.round(f3 * 100)}% ≥ 3 h (medium), ${Math.round(f4 * 100)}% ≥ 4 h (high). The standard checks one point per dwelling at the window; here every floor point is shown.</span></li>
-    <li><span class="ic mid">i</span><span><b>No direct sun on 21 December:</b> ${Math.round(fdec0 * 100)}% of the floor.</span></li>`;
+  h += '<ul class="checks">';
+  if (S) {
+    h = h.replace('<ul class="checks">', '') + `<div class="mini"><div><b>${fmtNum(meanOf(S.mar, idx), 1)} h</b><span>21 March</span></div><div><b>${fmtNum(meanOf(S.jun, idx), 1)} h</b><span>21 June</span></div><div><b>${fmtNum(meanOf(S.dec, idx), 1)} h</b><span>21 December</span></div><div><b>${fmtInt(meanOf(S.year, idx))} h</b><span>whole year</span></div></div><ul class="checks">`;
+    const f15 = fracAbove(S.mar, idx, 1.5), f3 = fracAbove(S.mar, idx, 3), f4 = fracAbove(S.mar, idx, 4), fdec0 = 1 - fracAbove(S.dec, idx, 0.05);
+    h += `<li><span class="ic mid">i</span><span><b>EN 17037 sunlight (21 March${result.sunMeta.minAlt ? `, sun above ${fmtNum(result.sunMeta.minAlt, 0)}°` : ''}):</b> ${Math.round(f15 * 100)}% of the floor gets ≥ 1.5 h (minimum), ${Math.round(f3 * 100)}% ≥ 3 h (medium), ${Math.round(f4 * 100)}% ≥ 4 h (high). The standard checks one point per dwelling at the window; here every floor point is shown.</span></li>
+      <li><span class="ic mid">i</span><span><b>No direct sun on 21 December:</b> ${Math.round(fdec0 * 100)}% of the floor.</span></li>`;
+  } else h += `<li><span class="ic mid">i</span><span><b>Sun hours:</b> not calculated yet — press “Sun hours”.</span></li>`;
   if (R) h += `<li><span class="ic mid">i</span><span><b>Solar radiation on the floor:</b> ${fmtInt(meanOf(R.year, idx))} kWh/m² per year on average (summer ${fmtInt(meanOf(R.summer, idx))}, winter ${fmtInt(meanOf(R.winter, idx))}). Direct sun through glazing plus diffuse sky light; high summer values flag overheating risk, winter values useful solar gains.</span></li>`;
-  else h += `<li><span class="ic mid">i</span><span><b>Solar radiation:</b> upload an EPW weather file (step 3) and run again to get kWh/m².</span></li>`;
+  else h += `<li><span class="ic mid">i</span><span><b>Solar radiation:</b> not calculated yet — press “Radiation” (needs an EPW file).</span></li>`;
   h += '</ul>';
   $('sunSummary').innerHTML = h;
   const rows = result.levels.map((l, i) => [escapeHtml(levelName(i)), l.idx]);
   if (rows.length > 1) rows.push(['Total', all]);
-  $('stats2').innerHTML = `<tr><th></th><th title="mean direct sun hours on 21 March">Mar h</th><th title="share of floor with ≥ 1.5 h on 21 March">≥1.5h</th><th title="mean direct sun hours on 21 December">Dec h</th><th title="mean annual direct sun hours">Year h</th>${R ? '<th title="kWh/m² per year">kWh yr</th><th title="kWh/m² in summer">summer</th><th title="kWh/m² in winter">winter</th>' : ''}</tr>` +
-    rows.map(([nm, ix]) => `<tr><td>${nm}</td><td>${fmtNum(meanOf(S.mar, ix), 1)}</td><td>${Math.round(fracAbove(S.mar, ix, 1.5) * 100)}%</td><td>${fmtNum(meanOf(S.dec, ix), 1)}</td><td>${fmtInt(meanOf(S.year, ix))}</td>${R ? `<td>${fmtInt(meanOf(R.year, ix))}</td><td>${fmtInt(meanOf(R.summer, ix))}</td><td>${fmtInt(meanOf(R.winter, ix))}</td>` : ''}</tr>`).join('');
+  $('stats2').innerHTML = `<tr><th></th>${S ? '<th title="mean direct sun hours on 21 March">Mar h</th><th title="share of floor with ≥ 1.5 h on 21 March">≥1.5h</th><th title="mean direct sun hours on 21 December">Dec h</th><th title="mean annual direct sun hours">Year h</th>' : ''}${R ? '<th title="kWh/m² per year">kWh yr</th><th title="kWh/m² in summer">summer</th><th title="kWh/m² in winter">winter</th>' : ''}</tr>` +
+    rows.map(([nm, ix]) => `<tr><td>${nm}</td>${S ? `<td>${fmtNum(meanOf(S.mar, ix), 1)}</td><td>${Math.round(fracAbove(S.mar, ix, 1.5) * 100)}%</td><td>${fmtNum(meanOf(S.dec, ix), 1)}</td><td>${fmtInt(meanOf(S.year, ix))}</td>` : ''}${R ? `<td>${fmtInt(meanOf(R.year, ix))}</td><td>${fmtInt(meanOf(R.summer, ix))}</td><td>${fmtInt(meanOf(R.winter, ix))}</td>` : ''}</tr>`).join('');
 }
 
 function suggestions(st, L) {
@@ -940,7 +1023,7 @@ function renderZoneLegend() {
 // iso-lines per level
 function buildContours() {
   for (const c of [...contourGroup.children]) { c.geometry.dispose(); c.material.dispose(); contourGroup.remove(c); }
-  if (!result || !showLines || displayMode === 'sun' || displayMode === 'rad') return;
+  if (!result || !result.df || !showLines || displayMode === 'sun' || displayMode === 'rad') return;
   const S = result.sensors, h = result.spacing, lv = currentLevel();
   const levels = lv ? [lv] : result.levels;
   const r = renderer.domElement.getBoundingClientRect();
@@ -974,12 +1057,14 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   ray.setFromCamera(ndc, camera);
   const hit = ray.intersectObject(cells)[0];
   if (hit && hit.instanceId != null && result.visible[hit.instanceId]) {
-    const v = result.df[hit.instanceId];
-    const bands = useBands(), b = bands[bandOf(v, bands)];
-    let t = `DF ${fmtNum(v, 2)}%  ·  ${fmtInt(v / 100 * result.eext)} lx  ·  ${b.short}`;
     const id = hit.instanceId;
-    if (result.sun) t += `  ·  sun ${fmtNum(result.sun.mar[id], 1)} h Mar / ${fmtNum(result.sun.dec[id], 1)} h Dec`;
-    if (result.rad) t += `  ·  ${fmtInt(result.rad.year[id])} kWh/m²·yr`;
+    let t = '';
+    if (result.df) {
+      const v = result.df[id], bands = useBands(), b = bands[bandOf(v, bands)];
+      t = `DF ${fmtNum(v, 2)}%  ·  ${fmtInt(v / 100 * result.eext)} lx  ·  ${b.short}`;
+    }
+    if (result.sun) t += `${t ? '  ·  ' : ''}sun ${fmtNum(result.sun.mar[id], 1)} h Mar / ${fmtNum(result.sun.dec[id], 1)} h Dec`;
+    if (result.rad) t += `${t ? '  ·  ' : ''}${fmtInt(result.rad.year[id])} kWh/m²·yr`;
     tip.textContent = t;
     tip.style.left = (e.clientX - r.left) + 'px'; tip.style.top = (e.clientY - r.top) + 'px'; tip.style.display = 'block';
   } else tip.style.display = 'none';
@@ -989,14 +1074,15 @@ renderer.domElement.addEventListener('pointerleave', () => (tip.style.display = 
 // ------------------------------------------------------------------ export
 function csvText() {
   const S = result.sensors, bands = useBands();
-  const head = ['x_m,y_m,z_workplane_m,z_slab_m,level,DF_pct,lux,zone'];
+  const head = ['x_m,y_m,z_workplane_m,z_slab_m,level' + (result.df ? ',DF_pct,lux,zone' : '')];
   if (result.sun) head.push('sun_21mar_h,sun_21jun_h,sun_21dec_h,sun_year_h');
   if (result.rad) head.push('rad_year_kWh_m2,rad_summer_kWh_m2,rad_winter_kWh_m2');
   const lines = [head.join(',')];
   const lvOf = new Int32Array(S.count);
   result.levels.forEach((l, i) => l.idx.forEach((k) => (lvOf[k] = i)));
   for (let i = 0; i < S.count; i++)
-    lines.push([S.x[i].toFixed(3), S.y[i].toFixed(3), S.z[i].toFixed(3), S.zs[i].toFixed(3), '"' + levelName(lvOf[i]) + '"', result.df[i].toFixed(3), Math.round(result.df[i] / 100 * result.eext), '"' + bands[bandOf(result.df[i], bands)].short + '"',
+    lines.push([S.x[i].toFixed(3), S.y[i].toFixed(3), S.z[i].toFixed(3), S.zs[i].toFixed(3), '"' + levelName(lvOf[i]) + '"',
+      ...(result.df ? [result.df[i].toFixed(3), Math.round(result.df[i] / 100 * result.eext), '"' + bands[bandOf(result.df[i], bands)].short + '"'] : []),
       ...(result.sun ? [result.sun.mar[i].toFixed(2), result.sun.jun[i].toFixed(2), result.sun.dec[i].toFixed(2), result.sun.year[i].toFixed(0)] : []),
       ...(result.rad ? [result.rad.year[i].toFixed(1), result.rad.summer[i].toFixed(1), result.rad.winter[i].toFixed(1)] : [])].join(','));
   return lines.join('\n');
@@ -1066,7 +1152,7 @@ $('exRun').onclick = async () => {
   try {
     const L = activeLines(), U = USES[useKey];
     const layers = [];
-    model.objects.forEach((o) => {
+    calcObjects().forEach((o) => {
       const role = model.layers[o.layer].role;
       if (role !== 'ignore') layers.push({ positions: o.positions, kind: role === 'glass' ? 'glass' : 'opaque' });
     });
@@ -1084,9 +1170,9 @@ $('exRun').onclick = async () => {
         let mx = 0; for (const k of lv.idx) mx = Math.max(mx, M.values[k]);
         return [`${fmtNum(st.area, 0)} m² analysed`, `mean ${fmtInt(meanOf(M.values, lv.idx))} kWh/m²`, `peak ${fmtInt(mx)} kWh/m²`];
       }
-      const BB = useBands();
+      const BB = useBands(), rt = floorRating(st);
       if (USES[useKey].bands && BB.length === USES[useKey].bands.length)
-        return [`${fmtNum(st.area, 0)} m² analysed`, ...BB.map((B, i) => ({ color: B.color, text: `${Math.round((st.frac(B.min) - (i + 1 < BB.length ? st.frac(BB[i + 1].min) : 0)) * 100)}% ${B.short.toLowerCase()} · ${B.label}` })).reverse()];
+        return [`${fmtNum(st.area, 0)} m² analysed · daylight: ${rt.label.toLowerCase()} ${rt.pass ? '✓' : rt.cls === 'mid' ? '~' : '✗'}`, ...BB.map((B, i) => ({ color: B.color, text: `${Math.round((st.frac(B.min) - (i + 1 < BB.length ? st.frac(BB[i + 1].min) : 0)) * 100)}% ${B.short.toLowerCase()} · ${B.label}` })).reverse()];
       return [`${fmtNum(st.area, 0)} m² analysed`, ...[...L].reverse().map((l) => ({ color: l.color, text: `${Math.round(st.frac(lineDF(l)) * 100)}% ≥ ${thrText(l)} · ${l.label.split(' (')[0]}` }))];
     });
     const viewDir = camera.position.clone().sub(controls.target);
@@ -1096,7 +1182,7 @@ $('exRun').onclick = async () => {
       ramp: exportRamp(), lines: $('exLines').checked && !sunMode ? L.map((l) => ({ df: displayMode === 'lux' ? lineDF(l) * result.eext / 100 : lineDF(l), color: l.color })) : [],
       gap: Math.max(0, parseFloat($('exGap').value) || 0), width: parseInt($('exWidth').value, 10), roof: $('exRoof').checked, slabs: $('exSlabs').checked,
       viewDir, legend: exportLegend(),
-      title: baseName(), subtitle: sunMode ? `${result.sunMeta.site} · ${U.name} · ${M.title} · True North ${fmtNum(result.opts.north || 0, 0)}°` : `${site.label} · ${U.name} · CIE overcast sky, median diffuse illuminance ${fmtInt(result.eext)} lx (EN 17037)`,
+      title: baseName(), subtitle: sunMode ? `${(result.sunMeta || result.radMeta).site} · ${U.name} · ${M.title} · True North ${fmtNum(result.opts.north || 0, 0)}°` : `${site.label} · ${U.name} · CIE overcast sky, median diffuse illuminance ${fmtInt(result.eext)} lx (EN 17037)`,
     });
     const url = URL.createObjectURL(out.blob);
     $('mImg').src = url; $('mInfo').textContent = `${out.width} × ${out.height} px`;

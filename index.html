@@ -89,6 +89,10 @@ h3.sub{font-size:12.5px;margin:18px 0 8px;font-weight:600}
 .needs{margin-top:12px;font-size:12px}
 .needs th{font-size:10.5px}
 .needs td:not(:first-child),.needs th:not(:first-child){text-align:right;font-family:var(--mono);white-space:nowrap}
+.runs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+.runs button{padding:10px 6px;font-size:12.5px}
+.runs button.busy{background:#7a3f00;border-color:#7a3f00}
+.pill.ok{background:#2f7d5b}.pill.mid{background:#c38a12}.pill.ko{background:#b23b2c}
 .mini{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px}
 .mini div{background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 8px}
 .mini b{display:block;font-family:var(--mono);font-size:15px}
@@ -218,12 +222,17 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
     </div>
     <label class="chk"><input type="checkbox" id="indoorOnly" checked> Indoor points only (something overhead)</label>
     <label class="chk"><input type="checkbox" id="solidFilter" checked> Skip points inside walls and solids</label>
-    <label class="chk"><input type="checkbox" id="doSun" checked> Also compute direct sun hours and solar radiation <span class="hint" style="margin:0">(radiation needs an EPW file)</span></label>
+    <label class="f" style="margin-top:10px" title="Test a thinner slab: slabs are thinned from below keeping their top surface; walls and glazing under them are extended up. Empty = as modelled."><span>Slab thickness for the calculation <i>m · empty = as modelled</i></span><input type="number" id="slabT" min="0.05" max="1" step="0.05" placeholder="as modelled"></label>
     <div id="estimate" class="hint"></div>
   </section>
 
   <section id="s-run" class="disabled">
-    <button class="primary" id="run">Run Daylight Factor</button>
+    <div class="runs">
+      <button class="primary" id="run-df">Daylight Factor</button>
+      <button class="primary" id="run-sun">Sun hours</button>
+      <button class="primary" id="run-rad">Radiation</button>
+    </div>
+    <p class="hint" style="margin:6px 0 0">Each analysis runs on its own and reuses the same grid. Sun hours and radiation use the location, True North and (for radiation) the EPW file.</p>
     <div class="progress"><div id="bar"></div></div>
     <div class="status" id="status">ready</div>
   </section>

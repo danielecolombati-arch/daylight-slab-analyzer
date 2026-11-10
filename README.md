@@ -16,9 +16,9 @@ A browser app that computes the **Daylight Factor (DF)** and natural illuminance
 
    Roles and typical reflectances are suggested from layer names (`SLABS`, `Glass`, `Core`, `Stairs`, `Lift`, `Grass`, `Context`…).
 3. **Location & building use** (see below).
-4. **Settings**: grid spacing, work plane height, ground reflectance, quality.
-5. **Run**: the calculation uses every CPU core.
-6. **Results**: daylight map per level (3D or plan), threshold lines, usable area per use, CSV export.
+4. **Settings**: grid spacing, work plane height, ground reflectance, quality, and an optional **slab thickness** to test thinner slabs (slabs are thinned from below keeping their top surface; walls and glazing ending under them are extended up, so no gap opens).
+5. **Run**: three separate buttons, **Daylight Factor**, **Sun hours** and **Radiation**. Each runs on its own and reuses the same grid; changing the grid, layers or slab thickness starts a fresh set of results. The calculation uses every CPU core.
+6. **Results**: daylight map per level (3D or plan), threshold lines, usable area per use, a **rating per floor** (residential: band of the floor's median DF — ✓ generally acceptable or good, ~ moderate, ✗ poor or very dark; office/industrial: ✓ when half the floor reaches the first line), CSV export.
 7. **Exploded axonometric**: all floors stacked in a high-resolution PNG, with level names, area percentages, legend and north arrow.
 
 ### Preparing the Rhino file
@@ -54,11 +54,11 @@ For each floor the app reports the m² and percentage inside each line, mean and
 
 ## Direct sun and solar radiation
 
-With *Also compute direct sun hours and solar radiation* (Settings), each floor point also gets:
+With the **Sun hours** and **Radiation** buttons, each floor point also gets:
 
 - **Direct sun hours** on **21 March, 21 June and 21 December** (10-minute steps) and over the **whole year** (hourly sun positions grouped into 1.5° bins). Sun through glazing counts; any opaque obstruction blocks it.
 - **EN 17037 sunlight exposure (indicative):** share of the floor with ≥ 1.5 h (minimum), ≥ 3 h (medium) and ≥ 4 h (high) of sun on 21 March, above a minimum sun altitude you can set. The standard checks one point per dwelling at the window; the app shows the whole floor.
-- **Solar radiation reaching the floor (kWh/m²)** for the **year**, **summer** (Jun–Aug) and **winter** (Dec–Feb): direct sun from the EPW direct-normal radiation, reduced by glass transmittance, plus diffuse sky radiation (DF × diffuse horizontal radiation). Beam light reflected inside the room is not included. Needs an **EPW** file.
+- **Solar radiation reaching the floor (kWh/m²)** for the **year**, **summer** (Jun–Aug) and **winter** (Dec–Feb): direct sun from the EPW direct-normal radiation, reduced by glass transmittance, plus diffuse sky radiation (DF × diffuse horizontal radiation; if the Daylight Factor has not been run, a quick sky calculation is done instead). Beam light reflected inside the room is not included. Needs an **EPW** file.
 
 Set **True North** (degrees counter-clockwise from the model +Y axis, as in Ladybug) before running. The map toolbar gets *Sun h* and *kWh/m²* modes with a period selector; per-floor tables, CSV columns and the exploded axonometric follow the selected mode.
 
@@ -93,6 +93,7 @@ src/engine.js         BVH, DF path tracing, sensor grid
 src/worker.js         Web Worker for parallel computation
 src/climate.js        location: EN 17037 table, EPW reader, sun position
 src/sun.js            sun samples for sun hours and radiation
+src/slabs.js          slab-thickness test (thin slabs, extend the envelope)
 src/contour.js        threshold lines (marching squares)
 src/exploded.js       exploded axonometric export
 src/demo.js           procedural sample model
