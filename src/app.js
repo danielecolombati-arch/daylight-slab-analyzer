@@ -6,6 +6,7 @@ import { makeDemo } from './demo.js';
 import { EN17037_CAPITALS, parseEPW } from './climate.js';
 import { contourSegments } from './contour.js';
 import { renderExploded } from './exploded.js';
+import { buildSunSamples } from './sun.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
@@ -253,8 +254,40 @@ function fitCamera(mode) {
 
 $('v3d').onclick = () => { setSeg('v3d', 'vPlan'); fitCamera('3d'); };
 $('vPlan').onclick = () => { setSeg('vPlan', 'v3d'); fitCamera('plan'); };
-const MODES = { zone: 'mZone', df: 'mDF', lux: 'mLux' };
-function setMode(m) { displayMode = m; for (const [k, id] of Object.entries(MODES)) $(id).classList.toggle('on', k === m); syncLegendRange(); recolor(); }
+const MODES = { zone: 'mZone', df: 'mDF', lux: 'mLux', sun: 'mSun', rad: 'mRad' };
+const SUBS = {
+  sun: [['mar', '21 March'], ['jun', '21 June'], ['dec', '21 December'], ['year', 'Whole year']],
+  rad: [['year', 'Year'], ['summer', 'Summer (Jun–Aug)'], ['winter', 'Winter (Dec–Feb)']],
+};
+let subKey = { sun: 'mar', rad: 'year' };
+function setMode(m) {
+  displayMode = m;
+  for (const [k, id] of Object.entries(MODES)) $(id).classList.toggle('on', k === m);
+  const sub = $('sub');
+  sub.hidden = !SUBS[m];
+  if (SUBS[m]) { sub.innerHTML = SUBS[m].map(([k, l]) => `<option value="${k}">${l}</option>`).join(''); sub.value = subKey[m]; }
+  syncLegendRange(); recolor(); buildContours(); renderStats();
+}
+$('sub').onchange = () => { subKey[displayMode] = $('sub').value; syncLegendRange(); recolor(); renderStats(); };
+$('mSun').onclick = () => setMode('sun');
+$('mRad').onclick = () => setMode('rad');
+
+/** Values and display info for the current map mode. */
+function metric(mode = displayMode) {
+  if (mode === 'sun') {
+    const k = subKey.sun, lbl = SUBS.sun.find((x) => x[0] === k)[1];
+    return { values: result.sun[k], title: `Direct sun hours · ${lbl}`, unit: ' h', dec: k === 'year' ? 0 : 1, pal: CMAP_SUN, key: 'sun-' + k };
+  }
+  if (mode === 'rad') {
+    const k = subKey.rad, lbl = SUBS.rad.find((x) => x[0] === k)[1];
+    return { values: result.rad[k], title: `Solar radiation on the floor · ${lbl} (kWh/m²)`, unit: ' kWh/m²', dec: 0, pal: CMAP_RAD, key: 'rad-' + k };
+  }
+  if (mode === 'lux') {
+    const kx = result.eext / 100, v = Float32Array.from(result.df, (x) => x * kx);
+    return { values: v, title: 'Illuminance (lux exceeded for half of daylight hours)', unit: ' lx', dec: 0, pal: CMAP, key: 'lux' };
+  }
+  return { values: result.df, title: 'Daylight Factor (%)', unit: '%', dec: 1, pal: CMAP, key: 'df' };
+}
 $('mZone').onclick = () => setMode('zone');
 $('mDF').onclick = () => setMode('df');
 $('mLux').onclick = () => setMode('lux');
@@ -293,6 +326,9 @@ function getOpts() {
     eext: parseFloat($('eext').value) || 19200,
     samples, maxBounces,
     indoorOnly: $('indoorOnly').checked,
+    doSun: $('doSun').checked,
+    north: parseFloat($('north').value) || 0,
+    minAlt: clamp(parseFloat($('minAlt').value), 0, 40, 0),
     solidFilter: $('solidFilter').checked,
   };
 }
@@ -349,12 +385,12 @@ function updateEstimate() {
   for (let i = 0; i < slab.pos.length; i += 9) area += horizontalArea(slab.pos.subarray(i, i + 9));
   const pts = area / (o.spacing * o.spacing);
   const cores = navigator.hardwareConcurrency || 4;
-  const sec = (pts * o.samples * (1.6 + o.maxBounces * 0.12)) / (1.2e6 * cores);
+  const sec = (pts * (o.samples * (1.6 + o.maxBounces * 0.12) + (o.doSun ? 1500 : 0))) / (1.2e6 * cores);
   $('estimate').innerHTML = slab.pos.length
     ? `≈ ${fmtInt(pts)} points on ${fmtNum(area, 0)} m² of slabs · estimated time ${sec < 60 ? Math.max(1, Math.round(sec)) + ' s' : Math.round(sec / 60) + ' min'} (${cores} cores)`
     : `<span class="warn" style="display:block">No layer set as <b>Slab</b> with horizontal surfaces.</span>`;
 }
-for (const id of ['spacing', 'quality']) $(id).addEventListener('input', updateEstimate);
+for (const id of ['spacing', 'quality', 'doSun']) $(id).addEventListener('input', updateEstimate);
 
 // ------------------------------------------------------------------ run
 let workers = [], running = false;
@@ -409,15 +445,45 @@ async function run() {
       }
     }));
     if (!running) return;
+    // ---- direct sun + radiation
+    let sunRaw = null, sunInfo = null;
+    if (o.doSun && site.lat != null) {
+      sunInfo = buildSunSamples({ lat: site.lat, lon: site.lon, tz: site.tz, hourly: site.hourly, north: o.north, minAlt: o.minAlt });
+      const G = sunInfo.G, nd = sunInfo.dirs.length / 3;
+      sunRaw = new Float32Array(S.count * G);
+      const CH2 = Math.max(8, Math.min(128, Math.ceil(S.count / (nW * 16))));
+      let next2 = 0, done2 = 0; const t1 = performance.now();
+      await Promise.all(workers.map(async (w) => {
+        while (running && next2 < S.count) {
+          const a = next2, b = Math.min(S.count, next2 + CH2); next2 = b;
+          const r = await call(w, { type: 'sun', jobId: a, x: S.x.slice(a, b), y: S.y.slice(a, b), z: S.z.slice(a, b), dirs: sunInfo.dirs, w: sunInfo.w, binary: sunInfo.binary, G }, 'sunresult');
+          sunRaw.set(r.values, a * G);
+          done2 += b - a; setBar(done2 / S.count);
+          const el = (performance.now() - t1) / 1000, eta = el / done2 * (S.count - done2);
+          setStatus(`sun & radiation ${fmtInt(done2)} / ${fmtInt(S.count)} points (${fmtInt(nd)} sun positions) · ${eta > 1 ? '~' + fmtDur(eta) + ' left' : 'almost done'}`);
+        }
+      }));
+      if (!running) return;
+    }
     result = { sensors: S, df, spacing: o.spacing, eext: o.eext, outdoor, solid, coreZs, opts: o };
     result.levels = makeLevels(S);
     result.coreZs = coreZs.filter((z) => result.levels.some((l) => z >= l.z - 0.05 && z <= l.max + 0.05)); // ignore roofs/outdoor
     result.raw = df; result.df = smooth(S, df, o.spacing);
+    if (sunRaw) {
+      const G = sunInfo.G, col = (g) => { const a = new Float32Array(S.count); for (let i = 0; i < S.count; i++) a[i] = sunRaw[i * G + g]; return a; };
+      result.sun = { mar: smooth(S, col(0), o.spacing), jun: smooth(S, col(1), o.spacing), dec: smooth(S, col(2), o.spacing), year: smooth(S, col(3), o.spacing) };
+      if (sunInfo.hasRad) {
+        const rad = (g, dif) => { const d = col(g); for (let i = 0; i < S.count; i++) d[i] = (d[i] + df[i] / 100 * dif) / 1000; return smooth(S, d, o.spacing); };
+        result.rad = { year: rad(4, sunInfo.diffuse.year), summer: rad(5, sunInfo.diffuse.summer), winter: rad(6, sunInfo.diffuse.winter) };
+      }
+      result.sunMeta = { site: site.label, lat: site.lat, north: o.north, minAlt: o.minAlt, hasRad: sunInfo.hasRad, south: site.lat < 0 };
+    }
     const secs = (performance.now() - t0) / 1000;
     let msg = `done in ${fmtDur(secs)} · ${fmtInt(S.count)} points`;
     if (outdoor) msg += ` · ${fmtInt(outdoor)} outdoor skipped`;
     if (solid) msg += ` · ${fmtInt(solid)} inside solids skipped`;
     if (result.coreZs.length) msg += ` · ${fmtNum(result.coreZs.length * o.spacing * o.spacing, 0)} m² of core excluded`;
+    if (o.doSun && result.sun && !result.rad) msg += ' · radiation skipped (no EPW)';
     setStatus(msg);
     if (solid > 0.4 * sensors.count) setStatus(msg + ' ⚠ many points skipped: the model normals may be flipped');
     showResults();
@@ -512,16 +578,27 @@ function showResults() {
   $('legend').style.display = 'block';
   $('s-results').classList.remove('disabled'); $('s-export').classList.remove('disabled');
   levelNames = result.levels.map(() => '');
+  $('mSun').disabled = !result.sun; $('mRad').disabled = !result.rad;
+  if ((displayMode === 'sun' && !result.sun) || (displayMode === 'rad' && !result.rad)) setMode('zone');
+  $('sunBox').hidden = !result.sun;
   renderLevelNames();
   applyLevel();
   setSeg('vPlan', 'v3d'); fitCamera('plan');
 }
 
 function syncLegendRange() {
-  if (!result) return;
-  const k = displayMode === 'lux' ? result.eext / 100 : 1;
-  $('lgMin').value = 0; $('lgMax').value = +(result.dfMax * k).toFixed(displayMode === 'lux' ? 0 : 1);
-  $('lgMin').step = $('lgMax').step = displayMode === 'lux' ? 50 : 0.5;
+  if (!result || displayMode === 'zone') return;
+  let hi;
+  if (displayMode === 'df' || displayMode === 'lux') hi = result.dfMax * (displayMode === 'lux' ? result.eext / 100 : 1);
+  else {
+    const m = metric(), sorted = Float32Array.from(m.values).sort();
+    const p98 = sorted[Math.floor(sorted.length * 0.98)] || 1;
+    const mag = Math.pow(10, Math.floor(Math.log10(Math.max(p98, 1e-6))));
+    hi = Math.ceil(p98 / mag) * mag;
+    if (displayMode === 'sun' && subKey.sun !== 'year') hi = Math.min(Math.max(hi, 2), 16);
+  }
+  $('lgMin').value = 0; $('lgMax').value = +hi.toFixed(displayMode === 'df' ? 1 : 0);
+  $('lgMin').step = $('lgMax').step = displayMode === 'df' || displayMode === 'sun' ? 0.5 : 50;
 }
 $('lgMin').onchange = $('lgMax').onchange = () => recolor();
 
@@ -562,27 +639,30 @@ function recolor() {
     return;
   }
   const lo = parseFloat($('lgMin').value) || 0, hi = Math.max(lo + 1e-6, parseFloat($('lgMax').value) || 1);
-  const k = displayMode === 'lux' ? result.eext / 100 : 1;
+  const M = metric();
   for (let i = 0; i < result.sensors.count; i++) {
-    const t = (result.df[i] * k - lo) / (hi - lo);
-    colormap(t, c); cells.setColorAt(i, c);
+    colormap((M.values[i] - lo) / (hi - lo), c, M.pal); cells.setColorAt(i, c);
   }
   cells.instanceColor.needsUpdate = true;
   // legend
   const stops = [];
-  for (let i = 0; i <= 10; i++) { colormap(i / 10, c); stops.push(`#${c.getHexString()} ${i * 10}%`); }
+  for (let i = 0; i <= 10; i++) { colormap(i / 10, c, M.pal); stops.push(`#${c.getHexString()} ${i * 10}%`); }
   $('lgBar').style.background = `linear-gradient(90deg, ${stops.join(',')})`;
   const ticks = [];
-  for (let i = 0; i <= 4; i++) ticks.push(`<span>${fmtNum(lo + (hi - lo) * i / 4, displayMode === 'lux' ? 0 : 1)}${i === 4 ? '+' : ''}</span>`);
+  for (let i = 0; i <= 4; i++) ticks.push(`<span>${fmtNum(lo + (hi - lo) * i / 4, hi - lo >= 20 ? 0 : 1)}${i === 4 ? '+' : ''}</span>`);
   $('lgTicks').innerHTML = ticks.join('');
-  $('lgTitle').textContent = displayMode === 'lux' ? `Illuminance (lux exceeded for half of daylight hours)` : 'Daylight Factor (%)';
+  $('lgTitle').textContent = M.title;
 }
 
 // Viridis-like perceptual colormap
 const CMAP = [[0.267, 0.005, 0.329], [0.283, 0.141, 0.458], [0.254, 0.265, 0.530], [0.207, 0.372, 0.553], [0.164, 0.471, 0.558], [0.128, 0.567, 0.551], [0.135, 0.659, 0.518], [0.267, 0.749, 0.441], [0.478, 0.821, 0.318], [0.741, 0.873, 0.150], [0.993, 0.906, 0.144]];
-function colormap(t, out) {
-  t = Math.min(1, Math.max(0, t)) * (CMAP.length - 1);
-  const i = Math.min(CMAP.length - 2, Math.floor(t)), f = t - i, a = CMAP[i], b = CMAP[i + 1];
+// Sun hours: deep blue → magenta → orange → yellow (plasma-like); radiation: inferno-like
+const CMAP_SUN = [[0.90, 0.91, 0.94], [0.99, 0.93, 0.66], [0.99, 0.82, 0.38], [0.98, 0.64, 0.20], [0.93, 0.43, 0.13], [0.79, 0.24, 0.10], [0.55, 0.10, 0.08]];
+const CMAP_RAD = [[0.95, 0.94, 0.91], [1.0, 0.93, 0.63], [1.0, 0.82, 0.42], [0.99, 0.64, 0.29], [0.97, 0.43, 0.20], [0.89, 0.20, 0.13], [0.72, 0.03, 0.15], [0.45, 0.0, 0.17]];
+function colormap(t, out, pal = CMAP) {
+  const P = pal;
+  t = Math.min(1, Math.max(0, t)) * (P.length - 1);
+  const i = Math.min(P.length - 2, Math.floor(t)), f = t - i, a = P[i], b = P[i + 1];
   return out.setRGB(a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f, THREE.SRGBColorSpace);
 }
 
@@ -617,7 +697,7 @@ const USES = {
 let useKey = 'res';
 let useLines = USES.res.lines.map((l) => ({ ...l, on: true }));
 let showLines = true;
-let site = { label: 'Rome, Italy', country: 'Italy', E: 19200, source: 'EN 17037, table A.3' };
+let site = { label: 'Rome, Italy', country: 'Italy', E: 19200, source: 'EN 17037, table A.3', lat: 41.8, lon: null, tz: null, hourly: null };
 
 function initSite() {
   const sel = $('loc');
@@ -629,7 +709,7 @@ function initSite() {
     const v = sel.value;
     if (v.startsWith('cap:')) {
       const c = EN17037_CAPITALS.find((x) => x.city === v.slice(4));
-      setSite({ label: `${c.city}, ${c.country}`, country: c.country, E: c.E, source: 'EN 17037, table A.3' });
+      setSite({ label: `${c.city}, ${c.country}`, country: c.country, E: c.E, source: 'EN 17037, table A.3 · upload an EPW for radiation', lat: c.lat, lon: null, tz: null, hourly: null });
     } else if (v === 'manual') setSite({ ...site, label: 'Manual value', country: '', source: 'manual' });
   };
   const drop = $('epwDrop'), input = $('epwFile');
@@ -642,7 +722,7 @@ function initSite() {
     const E = parseFloat($('eext').value);
     if (!(E > 0)) return;
     sel.value = 'manual';
-    setSite({ label: 'Manual value', country: site.country, E, source: 'manual' });
+    setSite({ ...site, label: 'Manual value', E, source: 'manual' });
   };
   $('use').onchange = () => setUse($('use').value);
   $('lines').onclick = () => { showLines = !showLines; $('lines').textContent = 'Lines: ' + (showLines ? 'on' : 'off'); buildContours(); };
@@ -655,7 +735,7 @@ async function loadEPW(file) {
     const opt = $('loc').querySelector('option[value="epw"]');
     opt.disabled = false; opt.textContent = `${r.city}, ${r.country} (EPW) · ${fmtInt(r.E)} lx`;
     $('loc').value = 'epw';
-    setSite({ label: `${r.city}, ${r.country}`, country: r.country, E: r.E,
+    setSite({ label: `${r.city}, ${r.country}`, country: r.country, E: r.E, lat: r.lat, lon: r.lon, tz: r.tz, hourly: r.hourly,
       source: `EPW · ${fmtNum(Math.abs(r.lat), 1)}°${r.lat >= 0 ? 'N' : 'S'} ${fmtNum(Math.abs(r.lon), 1)}°${r.lon >= 0 ? 'E' : 'W'} · ${fmtInt(r.hours)} daylight hours · from ${r.source}` });
   } catch (err) {
     $('locInfo').innerHTML = `<span style="color:var(--warn)">${escapeHtml(err.message)}</span>`;
@@ -767,6 +847,31 @@ function renderStats() {
   $('stats').innerHTML = `<tr><th></th><th>m²</th>${hasCore ? '<th title="Core area excluded">core</th>' : ''}<th>mean DF</th>${L.map((l) => `<th title="${escapeHtml(l.label)}"><span class="lsw" style="border-color:${l.color};width:10px"></span>≥${fmtInt(l.lux)}</th>`).join('')}</tr>` +
     rows.map(([nm, e], i) => `<tr><td>${nm}</td><td>${fmtNum(e.area, 0)}</td>${hasCore ? `<td>${fmtNum(coreArea(i < result.levels.length ? result.levels[i] : null), 0)}</td>` : ''}<td>${fmtNum(e.mean, 2)}</td>${L.map((l) => `<td>${Math.round(e.frac(dfOf(l.lux)) * 100)}%</td>`).join('')}</tr>`).join('');
   if (displayMode === 'zone') renderZoneLegend();
+  renderSunStats();
+}
+
+// ------------------------------------------------------------------ sun & radiation summary
+function meanOf(arr, idx) { let s = 0; for (const k of idx) s += arr[k]; return idx.length ? s / idx.length : 0; }
+function fracAbove(arr, idx, t) { let n = 0; for (const k of idx) if (arr[k] >= t) n++; return idx.length ? n / idx.length : 0; }
+function renderSunStats() {
+  if (!result || !result.sun) return;
+  const lv = currentLevel(), all = Array.from({ length: result.sensors.count }, (_, i) => i), idx = lv ? lv.idx : all;
+  const S = result.sun, R = result.rad, M = result.sunMeta;
+  const where = lv ? levelName(result.levels.indexOf(lv)) : 'All levels';
+  let h = `<div class="hint" style="margin:0">${escapeHtml(where)} · ${escapeHtml(M.site)} · True North ${fmtNum(M.north, 0)}° · direct sun through glazing, ${fmtInt(result.sensors.count)} points</div>`;
+  h += `<div class="mini"><div><b>${fmtNum(meanOf(S.mar, idx), 1)} h</b><span>21 March</span></div><div><b>${fmtNum(meanOf(S.jun, idx), 1)} h</b><span>21 June</span></div><div><b>${fmtNum(meanOf(S.dec, idx), 1)} h</b><span>21 December</span></div><div><b>${fmtInt(meanOf(S.year, idx))} h</b><span>whole year</span></div></div>`;
+  const f15 = fracAbove(S.mar, idx, 1.5), f3 = fracAbove(S.mar, idx, 3), f4 = fracAbove(S.mar, idx, 4), fdec0 = 1 - fracAbove(S.dec, idx, 0.05);
+  h += `<ul class="checks">
+    <li><span class="ic mid">i</span><span><b>EN 17037 sunlight (21 March${M.minAlt ? `, sun above ${fmtNum(M.minAlt, 0)}°` : ''}):</b> ${Math.round(f15 * 100)}% of the floor gets ≥ 1.5 h (minimum), ${Math.round(f3 * 100)}% ≥ 3 h (medium), ${Math.round(f4 * 100)}% ≥ 4 h (high). The standard checks one point per dwelling at the window; here every floor point is shown.</span></li>
+    <li><span class="ic mid">i</span><span><b>No direct sun on 21 December:</b> ${Math.round(fdec0 * 100)}% of the floor.</span></li>`;
+  if (R) h += `<li><span class="ic mid">i</span><span><b>Solar radiation on the floor:</b> ${fmtInt(meanOf(R.year, idx))} kWh/m² per year on average (summer ${fmtInt(meanOf(R.summer, idx))}, winter ${fmtInt(meanOf(R.winter, idx))}). Direct sun through glazing plus diffuse sky light; high summer values flag overheating risk, winter values useful solar gains.</span></li>`;
+  else h += `<li><span class="ic mid">i</span><span><b>Solar radiation:</b> upload an EPW weather file (step 3) and run again to get kWh/m².</span></li>`;
+  h += '</ul>';
+  $('sunSummary').innerHTML = h;
+  const rows = result.levels.map((l, i) => [escapeHtml(levelName(i)), l.idx]);
+  if (rows.length > 1) rows.push(['Total', all]);
+  $('stats2').innerHTML = `<tr><th></th><th title="mean direct sun hours on 21 March">Mar h</th><th title="share of floor with ≥ 1.5 h on 21 March">≥1.5h</th><th title="mean direct sun hours on 21 December">Dec h</th><th title="mean annual direct sun hours">Year h</th>${R ? '<th title="kWh/m² per year">kWh yr</th><th title="kWh/m² in summer">summer</th><th title="kWh/m² in winter">winter</th>' : ''}</tr>` +
+    rows.map(([nm, ix]) => `<tr><td>${nm}</td><td>${fmtNum(meanOf(S.mar, ix), 1)}</td><td>${Math.round(fracAbove(S.mar, ix, 1.5) * 100)}%</td><td>${fmtNum(meanOf(S.dec, ix), 1)}</td><td>${fmtInt(meanOf(S.year, ix))}</td>${R ? `<td>${fmtInt(meanOf(R.year, ix))}</td><td>${fmtInt(meanOf(R.summer, ix))}</td><td>${fmtInt(meanOf(R.winter, ix))}</td>` : ''}</tr>`).join('');
 }
 
 function suggestions(st, L) {
@@ -792,7 +897,7 @@ function renderZoneLegend() {
 // iso-lines per level
 function buildContours() {
   for (const c of [...contourGroup.children]) { c.geometry.dispose(); c.material.dispose(); contourGroup.remove(c); }
-  if (!result || !showLines) return;
+  if (!result || !showLines || displayMode === 'sun' || displayMode === 'rad') return;
   const S = result.sensors, h = result.spacing, lv = currentLevel();
   const levels = lv ? [lv] : result.levels;
   const r = renderer.domElement.getBoundingClientRect();
@@ -828,7 +933,11 @@ renderer.domElement.addEventListener('pointermove', (e) => {
   if (hit && hit.instanceId != null && result.visible[hit.instanceId]) {
     const v = result.df[hit.instanceId];
     const bands = useBands(), b = bands[bandOf(v, bands)];
-    tip.textContent = `DF ${fmtNum(v, 2)}%  ·  ${fmtInt(v / 100 * result.eext)} lx  ·  ${b.short}`;
+    let t = `DF ${fmtNum(v, 2)}%  ·  ${fmtInt(v / 100 * result.eext)} lx  ·  ${b.short}`;
+    const id = hit.instanceId;
+    if (result.sun) t += `  ·  sun ${fmtNum(result.sun.mar[id], 1)} h Mar / ${fmtNum(result.sun.dec[id], 1)} h Dec`;
+    if (result.rad) t += `  ·  ${fmtInt(result.rad.year[id])} kWh/m²·yr`;
+    tip.textContent = t;
     tip.style.left = (e.clientX - r.left) + 'px'; tip.style.top = (e.clientY - r.top) + 'px'; tip.style.display = 'block';
   } else tip.style.display = 'none';
 });
@@ -836,11 +945,17 @@ renderer.domElement.addEventListener('pointerleave', () => (tip.style.display = 
 
 // ------------------------------------------------------------------ export
 function csvText() {
-  const S = result.sensors, bands = useBands(), lines = ['x_m,y_m,z_workplane_m,z_slab_m,level,DF_pct,lux,zone'];
+  const S = result.sensors, bands = useBands();
+  const head = ['x_m,y_m,z_workplane_m,z_slab_m,level,DF_pct,lux,zone'];
+  if (result.sun) head.push('sun_21mar_h,sun_21jun_h,sun_21dec_h,sun_year_h');
+  if (result.rad) head.push('rad_year_kWh_m2,rad_summer_kWh_m2,rad_winter_kWh_m2');
+  const lines = [head.join(',')];
   const lvOf = new Int32Array(S.count);
   result.levels.forEach((l, i) => l.idx.forEach((k) => (lvOf[k] = i)));
   for (let i = 0; i < S.count; i++)
-    lines.push([S.x[i].toFixed(3), S.y[i].toFixed(3), S.z[i].toFixed(3), S.zs[i].toFixed(3), '"' + levelName(lvOf[i]) + '"', result.df[i].toFixed(3), Math.round(result.df[i] / 100 * result.eext), '"' + bands[bandOf(result.df[i], bands)].short + '"'].join(','));
+    lines.push([S.x[i].toFixed(3), S.y[i].toFixed(3), S.z[i].toFixed(3), S.zs[i].toFixed(3), '"' + levelName(lvOf[i]) + '"', result.df[i].toFixed(3), Math.round(result.df[i] / 100 * result.eext), '"' + bands[bandOf(result.df[i], bands)].short + '"',
+      ...(result.sun ? [result.sun.mar[i].toFixed(2), result.sun.jun[i].toFixed(2), result.sun.dec[i].toFixed(2), result.sun.year[i].toFixed(0)] : []),
+      ...(result.rad ? [result.rad.year[i].toFixed(1), result.rad.summer[i].toFixed(1), result.rad.winter[i].toFixed(1)] : [])].join(','));
   return lines.join('\n');
 }
 function download(name, blob) {
@@ -881,10 +996,9 @@ function exportRamp() {
     const c = new THREE.Color();
     return { lo: 0, hi, fn: (t) => { c.set(bands[bandOf(t * hi, bands)].fill); const o = c.getRGB({}, THREE.SRGBColorSpace); return [o.r, o.g, o.b]; } };
   }
-  const k = displayMode === 'lux' ? result.eext / 100 : 1;
-  const lo = (parseFloat($('lgMin').value) || 0) / k, hi = Math.max(lo + 1e-6, (parseFloat($('lgMax').value) || 1) / k);
-  const c = new THREE.Color();
-  return { lo, hi, fn: (t) => { colormap(t, c); const o = c.getRGB({}, THREE.SRGBColorSpace); return [o.r, o.g, o.b]; } };
+  const lo = parseFloat($('lgMin').value) || 0, hi = Math.max(lo + 1e-6, parseFloat($('lgMax').value) || 1);
+  const c = new THREE.Color(), pal = metric().pal;
+  return { lo, hi, fn: (t) => { colormap(t, c, pal); const o = c.getRGB({}, THREE.SRGBColorSpace); return [o.r, o.g, o.b]; } };
 }
 
 function exportLegend() {
@@ -894,12 +1008,12 @@ function exportLegend() {
     return { title: 'Daylight · lux exceeded for 50% of daylight hours',
       items: [...bands.map((b) => ({ type: 'fill', color: b.fill, label: `${b.label} · ${b.desc}` })).reverse(), ...lineItems] };
   }
-  const c = new THREE.Color(), stops = [];
-  for (let i = 0; i <= 10; i++) { colormap(i / 10, c); stops.push(['#' + c.getHexString(), i / 10]); }
+  const c = new THREE.Color(), stops = [], M = metric();
+  for (let i = 0; i <= 10; i++) { colormap(i / 10, c, M.pal); stops.push(['#' + c.getHexString(), i / 10]); }
   const lo = parseFloat($('lgMin').value) || 0, hi = parseFloat($('lgMax').value) || 1;
-  const unit = displayMode === 'lux' ? ' lx' : '%';
-  return { title: displayMode === 'lux' ? 'Illuminance exceeded for 50% of daylight hours' : 'Daylight Factor',
-    gradient: stops, ticks: [0, 1, 2, 3, 4].map((i) => fmtNum(lo + (hi - lo) * i / 4, displayMode === 'lux' ? 0 : 1) + unit + (i === 4 ? '+' : '')) };
+  const items = (displayMode === 'df' || displayMode === 'lux') ? lineItems : [];
+  return { title: M.title, gradient: stops, items2: items,
+    ticks: [0, 1, 2, 3, 4].map((i) => fmtNum(lo + (hi - lo) * i / 4, hi - lo >= 20 ? 0 : 1) + M.unit + (i === 4 ? '+' : '')) };
 }
 
 $('exRun').onclick = async () => {
@@ -913,24 +1027,35 @@ $('exRun').onclick = async () => {
       const role = model.layers[o.layer].role;
       if (role !== 'ignore') layers.push({ positions: o.positions, kind: role === 'glass' ? 'glass' : 'opaque' });
     });
+    const sunMode = displayMode === 'sun' || displayMode === 'rad';
+    const M = displayMode === 'zone' ? null : metric();
     const stats = result.levels.map((lv) => {
       if (!$('exStats').checked) return [];
       const st = areaStats(lv.idx);
+      if (displayMode === 'sun') {
+        const arr = M.values, mean = meanOf(arr, lv.idx);
+        const extra = subKey.sun === 'mar' ? [`${Math.round(fracAbove(arr, lv.idx, 1.5) * 100)}% ≥ 1.5 h (EN 17037 minimum)`] : [];
+        return [`${fmtNum(st.area, 0)} m² analysed`, `mean ${fmtNum(mean, M.dec)} h of direct sun`, ...extra];
+      }
+      if (displayMode === 'rad') {
+        let mx = 0; for (const k of lv.idx) mx = Math.max(mx, M.values[k]);
+        return [`${fmtNum(st.area, 0)} m² analysed`, `mean ${fmtInt(meanOf(M.values, lv.idx))} kWh/m²`, `peak ${fmtInt(mx)} kWh/m²`];
+      }
       return [`${fmtNum(st.area, 0)} m² analysed`, ...[...L].reverse().map((l) => ({ color: l.color, text: `${Math.round(st.frac(dfOf(l.lux)) * 100)}% ≥ ${fmtInt(l.lux)} lx · ${l.label.split(' (')[0]}` }))];
     });
     const viewDir = camera.position.clone().sub(controls.target);
     const out = await renderExploded({
-      layers, sensors: result.sensors, df: result.df, levels: result.levels, spacing: result.spacing,
+      layers, sensors: result.sensors, df: M ? M.values : result.df, levels: result.levels, spacing: result.spacing, north: result.opts.north || 0,
       names: result.levels.map((_, i) => levelName(i)), stats,
-      ramp: exportRamp(), lines: $('exLines').checked ? L.map((l) => ({ df: dfOf(l.lux), color: l.color })) : [],
+      ramp: exportRamp(), lines: $('exLines').checked && !sunMode ? L.map((l) => ({ df: displayMode === 'lux' ? l.lux : dfOf(l.lux), color: l.color })) : [],
       gap: Math.max(0, parseFloat($('exGap').value) || 0), width: parseInt($('exWidth').value, 10), roof: $('exRoof').checked, slabs: $('exSlabs').checked,
       viewDir, legend: exportLegend(),
-      title: baseName(), subtitle: `${site.label} · ${U.name} · CIE overcast sky, median diffuse illuminance ${fmtInt(result.eext)} lx (EN 17037)`,
+      title: baseName(), subtitle: sunMode ? `${result.sunMeta.site} · ${U.name} · ${M.title} · True North ${fmtNum(result.opts.north || 0, 0)}°` : `${site.label} · ${U.name} · CIE overcast sky, median diffuse illuminance ${fmtInt(result.eext)} lx (EN 17037)`,
     });
     const url = URL.createObjectURL(out.blob);
     $('mImg').src = url; $('mInfo').textContent = `${out.width} × ${out.height} px`;
     $('modal').hidden = false;
-    $('mDownload').onclick = () => download(baseName() + '_exploded_axo.png', out.blob);
+    $('mDownload').onclick = () => download(baseName() + `_exploded_${M ? M.key : 'zones'}.png`, out.blob);
     $('mClose').onclick = () => { $('modal').hidden = true; URL.revokeObjectURL(url); };
   } catch (err) {
     console.error(err); setStatus('export error: ' + (err.message || err));

@@ -255,7 +255,7 @@ export async function renderExploded(o) {
   const u = W / 2400;
   const font = (px, w = 400) => `${w} ${Math.round(px)}px "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif`;
   const lg = o.legend;
-  const legCols = lg.items ? 2 : 1, legRows = lg.items ? Math.ceil(lg.items.length / legCols) : 2;
+  const legCols = lg.items ? 2 : 1, legRows = lg.items ? Math.ceil(lg.items.length / legCols) : 2 + (lg.items2 && lg.items2.length ? lg.items2.length : 0);
   const legH = 70 * u + legRows * 44 * u;
   const topPad = Math.round(W * 0.075), botPad = Math.round(legH + 70 * u);
   const Hc = Hr + topPad + botPad;
@@ -279,19 +279,27 @@ export async function renderExploded(o) {
   }
   ctx.restore();
 
-  // brackets + labels
+  // brackets + labels: one anchor per slice (its floor level), brackets never overlap
   const scr = sliceBoxes.map((s) => {
-    let x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    let x1 = -Infinity;
     for (let c = 0; c < 8; c++) {
-      const [px, py] = proj(c & 1 ? s.bb.max.x : s.bb.min.x, c & 2 ? s.bb.max.y : s.bb.min.y, c & 4 ? s.bb.max.z : s.bb.min.z);
-      x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
+      const [px] = proj(c & 1 ? s.bb.max.x : s.bb.min.x, c & 2 ? s.bb.max.y : s.bb.min.y, c & 4 ? s.bb.max.z : s.bb.min.z);
+      x1 = Math.max(x1, px);
     }
-    return { x1, y0, y1 };
+    const zAnchor = (s.slice.level >= 0 ? levels[s.slice.level].z + storey * 0.35 : (s.bb.isEmpty() ? s.slice.z0 : (s.bb.min.z + s.bb.max.z) / 2 - s.off)) + s.off;
+    const [, yc] = proj(centre.x, centre.y, zAnchor);
+    return { x1, yc };
+  });
+  const order = scr.map((s, i) => i).sort((a, b) => scr[a].yc - scr[b].yc);
+  order.forEach((i, k) => {
+    const up = k > 0 ? scr[order[k - 1]].yc : null, dn = k + 1 < order.length ? scr[order[k + 1]].yc : null;
+    const half = 0.42 * Math.min(up !== null ? scr[i].yc - up : Infinity, dn !== null ? dn - scr[i].yc : Infinity, 260 * u * 2);
+    scr[i].y0 = scr[i].yc - half; scr[i].y1 = scr[i].yc + half;
   });
   const bx = Math.min(Wr + 30 * u, Math.max(...scr.map((s) => s.x1)) + 50 * u);
   ctx.strokeStyle = '#1d1f22'; ctx.lineWidth = 2.4 * u; ctx.fillStyle = '#1d1f22';
   sliceBoxes.forEach((s, i) => {
-    const sc = scr[i], span = sc.y1 - sc.y0, y0 = sc.y0 + span * 0.12, y1 = sc.y1 - span * 0.12, tick = 22 * u;
+    const sc = scr[i], y0 = sc.y0, y1 = sc.y1, tick = 22 * u;
     ctx.beginPath(); ctx.moveTo(bx - tick, y0); ctx.lineTo(bx, y0); ctx.lineTo(bx, y1); ctx.lineTo(bx - tick, y1); ctx.stroke();
     const name = s.slice.level >= 0 ? o.names[s.slice.level] : 'Roof';
     const extra = s.slice.level >= 0 ? (o.stats[s.slice.level] || []) : [];
@@ -302,7 +310,7 @@ export async function renderExploded(o) {
     for (const line of extra) {
       ty += lh;
       if (typeof line === 'string') ctx.fillText(line, bx + 30 * u, ty);
-      else { // { color, text }
+      else {
         ctx.fillStyle = line.color; ctx.fillRect(bx + 30 * u, ty - 11 * u, 26 * u, 6 * u);
         ctx.fillStyle = '#55585d'; ctx.fillText(line.text, bx + 66 * u, ty);
       }
@@ -314,7 +322,8 @@ export async function renderExploded(o) {
   ctx.fillStyle = '#6b6e73'; ctx.font = font(28 * u); ctx.fillText(o.subtitle, 60 * u, 124 * u);
 
   // north arrow (bottom-left)
-  const nc = proj(centre.x, centre.y, all.min.z), nn = proj(centre.x, centre.y + 1, all.min.z);
+  const nr = (o.north || 0) * Math.PI / 180;
+  const nc = proj(centre.x, centre.y, all.min.z), nn = proj(centre.x - Math.sin(nr), centre.y + Math.cos(nr), all.min.z);
   const ang = Math.atan2(nn[1] - nc[1], nn[0] - nc[0]);
   const ax = 120 * u, ay = Hc - botPad + 110 * u, L = 60 * u;
   ctx.save(); ctx.translate(ax, ay); ctx.rotate(ang + Math.PI / 2);
@@ -342,6 +351,11 @@ export async function renderExploded(o) {
     ctx.fillStyle = gr; ctx.fillRect(lx0, ly + 22 * u, gw, 26 * u);
     ctx.fillStyle = '#3a3c40';
     lg.ticks.forEach((t, i) => { const tw = ctx.measureText(t).width; ctx.fillText(t, lx0 + gw * i / (lg.ticks.length - 1) - (i ? (i === lg.ticks.length - 1 ? tw : tw / 2) : 0), ly + 82 * u); });
+    (lg.items2 || []).forEach((it, i) => {
+      const cy = ly + 130 * u + i * 44 * u;
+      ctx.fillStyle = it.color; ctx.fillRect(lx0, cy - 13 * u, 34 * u, 6 * u);
+      ctx.fillStyle = '#3a3c40'; ctx.fillText(it.label, lx0 + 50 * u, cy);
+    });
   }
 
   renderer.dispose(); heatMat.uniforms.ramp.value.dispose();

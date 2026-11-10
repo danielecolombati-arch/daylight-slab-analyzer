@@ -8,6 +8,7 @@ p.on('pageerror', e => console.log('[pageerror]', e.message));
 await p.goto('http://localhost:8123/index.html');
 await p.click('#demo');
 await p.waitForTimeout(500);
+await p.setInputFiles('#epwFile', 'test/sample.epw'); await p.waitForTimeout(300);
 console.log('estimate:', await p.textContent('#estimate'));
 await p.screenshot({ path: 'test/shot_model.png' });
 
@@ -16,8 +17,20 @@ await p.waitForFunction(() => window.__daylight.result, null, { timeout: 180000 
 await p.waitForTimeout(800);
 console.log('status:', await p.textContent('#status'));
 console.log('stats:', (await p.innerText('#stats')).replace(/\n/g,' | '));
-console.log('summary:', (await p.innerText('#summary')).replace(/\n/g,' | '));
-await p.setInputFiles('#epwFile', '/home/claude/epw/chicago.epw'); await p.waitForTimeout(500);
+console.log('summary:', (await p.innerText('#summary')).replace(/\n/g,' | ').slice(0,300));
+console.log('SUN summary:', (await p.innerText('#sunSummary')).replace(/\n/g,' | '));
+console.log('SUN table:', (await p.innerText('#stats2')).replace(/\n/g,' | '));
+await p.click('#mSun'); await p.waitForTimeout(300); await p.screenshot({ path: 'test/shot_sun_mar.png' });
+await p.selectOption('#sub', 'dec'); await p.waitForTimeout(300); await p.screenshot({ path: 'test/shot_sun_dec.png' });
+await p.click('#mRad'); await p.waitForTimeout(300); console.log('rad legend:', await p.textContent('#lgTitle'), await p.innerText('#lgTicks'));
+await p.screenshot({ path: 'test/shot_rad.png' });
+await p.selectOption('#exWidth', '2400'); await p.click('#exRun');
+await p.waitForSelector('#modal:not([hidden])', { timeout: 120000 });
+{ const src = await p.getAttribute('#mImg', 'src');
+  const b64 = await p.evaluate(async (u) => { const r = await fetch(u); const b = await r.blob(); return await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result.split(',')[1]); fr.readAsDataURL(b); }); }, src);
+  fs.writeFileSync('test/exploded_rad.png', Buffer.from(b64, 'base64')); }
+await p.click('#mClose');
+await p.click('#mZone'); await p.waitForTimeout(200);
 console.log('after EPW:', await p.inputValue('#eext'), '|', await p.textContent('#locInfo'));
 console.log('summary EPW:', (await p.innerText('#summary')).split('\n').slice(0,8).join(' | '));
 await p.selectOption('#loc', 'cap:Rome'); await p.waitForTimeout(300);

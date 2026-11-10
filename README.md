@@ -52,6 +52,18 @@ Thresholds can be edited and each line can be switched off. Inside a line there 
 
 For each floor the app reports the m² and percentage inside each line, mean and median DF, the EN 17037 level reached by the whole floor, and, for projects in Italy, a reminder of D.M. 5/7/1975 (mean DF ≥ 2% per room).
 
+## Direct sun and solar radiation
+
+With *Also compute direct sun hours and solar radiation* (Settings), each floor point also gets:
+
+- **Direct sun hours** on **21 March, 21 June and 21 December** (10-minute steps) and over the **whole year** (hourly sun positions grouped into 1.5° bins). Sun through glazing counts; any opaque obstruction blocks it.
+- **EN 17037 sunlight exposure (indicative):** share of the floor with ≥ 1.5 h (minimum), ≥ 3 h (medium) and ≥ 4 h (high) of sun on 21 March, above a minimum sun altitude you can set. The standard checks one point per dwelling at the window; the app shows the whole floor.
+- **Solar radiation reaching the floor (kWh/m²)** for the **year**, **summer** (Jun–Aug) and **winter** (Dec–Feb): direct sun from the EPW direct-normal radiation, reduced by glass transmittance, plus diffuse sky radiation (DF × diffuse horizontal radiation). Beam light reflected inside the room is not included. Needs an **EPW** file.
+
+Set **True North** (degrees counter-clockwise from the model +Y axis, as in Ladybug) before running. The map toolbar gets *Sun h* and *kWh/m²* modes with a period selector; per-floor tables, CSV columns and the exploded axonometric follow the selected mode.
+
+Checks (`npm test`): an open point gets 12.0 h on 21 March, 15.2 h on 21 June and 9.0 h on 21 December at 42° N; annual global horizontal radiation rebuilt from the EPW matches the file within 1%; glass with τ 0.6 cuts radiation by 40% without changing sun hours.
+
 ## Calculation method
 
 - **Sky**: CIE standard overcast sky, `L(γ) = Lz·(1 + 2 sin γ)/3`.
@@ -79,7 +91,8 @@ index.html            user interface
 src/app.js            three.js viewer, .3dm import, UI, results
 src/engine.js         BVH, DF path tracing, sensor grid
 src/worker.js         Web Worker for parallel computation
-src/climate.js        location: EN 17037 table and EPW reader
+src/climate.js        location: EN 17037 table, EPW reader, sun position
+src/sun.js            sun samples for sun hours and radiation
 src/contour.js        threshold lines (marching squares)
 src/exploded.js       exploded axonometric export
 src/demo.js           procedural sample model
@@ -91,7 +104,6 @@ test/                 engine tests, end-to-end test, sample .3dm generator
 
 - Automatic room detection and per-room compliance
 - Angle-dependent glass transmittance and frame factor
-- Clear sky and direct sun by date and time (point-in-time illuminance, sunlight hours)
 - Climate-based daylight (sDA, ASE, UDI) from EPW files
 - PDF report
 

@@ -433,3 +433,35 @@ export function classifySensors(S, sensors) {
   }
   return out;
 }
+
+// ---------------------------------------------------------------- direct sun
+/** Fraction of a sun ray reaching the point: product of glass transmittances, 0 if blocked. */
+export function sunTransmission(S, px, py, pz, dx, dy, dz) {
+  let ox = px, oy = py, oz = pz, T = 1;
+  for (let pass = 0; pass < 8; pass++) {
+    const h = intersect(S, ox, oy, oz, dx, dy, dz, 1e30);
+    if (h < 0) return T;
+    const m = S.tmat[h];
+    if (S.matType[m] !== MAT_GLASS) return 0;
+    T *= S.matTau[m];
+    if (T < 1e-3) return 0;
+    const t = S.hitT;
+    ox += dx * (t + 1e-4); oy += dy * (t + 1e-4); oz += dz * (t + 1e-4);
+  }
+  return T;
+}
+
+/**
+ * Accumulate sun results for one point.
+ * dirs: Float32Array (3 per direction); w: Float32Array (G per direction); binary: Uint8Array (G)
+ * binary groups count hours when the sun is visible through glass (T > 0); others are weighted by T.
+ */
+export function sunAccumulate(S, px, py, pz, dirs, w, binary, G, out, o) {
+  const n = dirs.length / 3;
+  for (let g = 0; g < G; g++) out[o + g] = 0;
+  for (let k = 0; k < n; k++) {
+    const T = sunTransmission(S, px, py, pz + 1e-4, dirs[k * 3], dirs[k * 3 + 1], dirs[k * 3 + 2]);
+    if (T <= 0) continue;
+    for (let g = 0; g < G; g++) { const wk = w[k * G + g]; if (wk) out[o + g] += binary[g] ? wk : wk * T; }
+  }
+}

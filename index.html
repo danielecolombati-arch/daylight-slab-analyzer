@@ -84,6 +84,12 @@ td input[type=number]{padding:3px 4px;font-size:12px;width:52px}
 .note{font-size:11.5px;color:var(--muted);margin-top:10px}
 .pill{display:inline-block;padding:1px 7px;border-radius:10px;color:#fff;font-size:11px;font-family:'IBM Plex Sans',sans-serif}
 .legend .zl .zrow{font-size:11.5px}
+h3.sub{font-size:12.5px;margin:18px 0 8px;font-weight:600}
+.toolbar .seg button:disabled{opacity:.4;cursor:default}
+.mini{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px}
+.mini div{background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+.mini b{display:block;font-family:var(--mono);font-size:15px}
+.mini span{font-size:10.5px;color:var(--muted)}
 th.nt{text-transform:none;letter-spacing:0;font-size:11.5px}
 .na{color:#b7b1a6;display:inline-block;width:52px;text-align:center}
 .lvrow{display:flex;gap:6px;align-items:center;margin-top:5px;font-size:12px;color:var(--muted)}
@@ -178,6 +184,10 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
       <label class="f" title="Median external diffuse horizontal illuminance during daylight hours (EN 17037)"><span>Median diffuse E <i>lux</i></span><input type="number" id="eext" value="19200" min="1000" step="100"></label>
       <div id="locInfo" class="hint" style="margin:0;align-self:end"></div>
     </div>
+    <div class="grid2" style="margin-top:8px">
+      <label class="f" title="Angle of True North, counter-clockwise from the model +Y axis (same convention as Ladybug)"><span>True North <i>° ccw from +Y</i></span><input type="number" id="north" value="0" step="1"></label>
+      <label class="f" title="EN 17037 sunlight exposure: sun below this altitude is not counted on 21 March (the standard gives location-specific values)"><span>Min. sun altitude <i>° (21 Mar)</i></span><input type="number" id="minAlt" value="0" min="0" max="40" step="1"></label>
+    </div>
     <label class="f" style="margin-top:12px"><span>Building use</span>
       <select id="use">
         <option value="res">Residential</option>
@@ -205,6 +215,7 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
     </div>
     <label class="chk"><input type="checkbox" id="indoorOnly" checked> Indoor points only (something overhead)</label>
     <label class="chk"><input type="checkbox" id="solidFilter" checked> Skip points inside walls and solids</label>
+    <label class="chk"><input type="checkbox" id="doSun" checked> Also compute direct sun hours and solar radiation <span class="hint" style="margin:0">(radiation needs an EPW file)</span></label>
     <div id="estimate" class="hint"></div>
   </section>
 
@@ -218,6 +229,11 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
     <h2><span class="n">5</span>Results</h2>
     <div id="summary"></div>
     <div style="margin-top:12px;overflow-x:auto"><table class="stats" id="stats"></table></div>
+    <div id="sunBox" hidden>
+      <h3 class="sub">Direct sun &amp; solar radiation</h3>
+      <div id="sunSummary"></div>
+      <div style="margin-top:10px;overflow-x:auto"><table class="stats" id="stats2"></table></div>
+    </div>
     <div class="row">
       <button id="csv">Download CSV</button>
       <button id="csvCopy">Copy CSV</button>
@@ -253,7 +269,8 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
   <div class="toolbar">
     <div class="seg"><button id="v3d" class="on">3D</button><button id="vPlan">Plan</button></div>
     <select id="level"><option value="all">All levels</option></select>
-    <div class="seg"><button id="mZone" class="on">Zones</button><button id="mDF">DF %</button><button id="mLux">lux</button></div>
+    <div class="seg"><button id="mZone" class="on">Zones</button><button id="mDF">DF %</button><button id="mLux">lux</button><button id="mSun" disabled>Sun h</button><button id="mRad" disabled>kWh/m²</button></div>
+    <select id="sub" hidden></select>
     <button id="lines">Lines: on</button>
     <button id="ghost">Model: solid</button>
   </div>
