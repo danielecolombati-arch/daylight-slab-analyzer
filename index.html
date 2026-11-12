@@ -133,6 +133,19 @@ main{position:relative;overflow:hidden}
 .legend .ticks{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;margin-top:3px}
 .legend .rng{display:flex;gap:6px;align-items:center;margin-top:8px;font-size:11.5px;color:var(--muted)}
 .legend .rng input{width:58px;padding:2px 5px;font-size:12px}
+#compass{position:absolute;left:14px;bottom:14px;background:rgba(255,255,255,.94);border:1px solid var(--line);border-radius:12px;padding:6px 8px 8px;user-select:none}
+#compass[hidden]{display:none}
+#compSvg{display:block;cursor:grab;touch-action:none}
+#compSvg.drag{cursor:grabbing}
+#compSvg .ring{fill:#faf9f6;stroke:#d6d1c7;stroke-width:1.5}
+#compSvg .tick{stroke:#b9b3a8;stroke-width:1.2}
+#compSvg .tip{fill:#e0892b}
+#compSvg .tail{fill:#c9c4bb}
+#compSvg .n{font:600 15px 'IBM Plex Sans',sans-serif;fill:#7a3f00}
+#compSvg .hub{fill:#1d1f22}
+.comprow{display:flex;align-items:center;justify-content:space-between;gap:4px;margin-top:2px}
+.comprow button{font-size:11px;padding:2px 6px;border-radius:6px}
+.comprow span{font-family:var(--mono);font-size:12px;min-width:44px;text-align:center}
 #tip{position:absolute;pointer-events:none;background:var(--ink);color:#fff;font-family:var(--mono);font-size:12px;padding:5px 8px;border-radius:6px;display:none;white-space:nowrap;transform:translate(12px,12px)}
 .empty{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);text-align:center;pointer-events:none}
 .empty div{max-width:380px}
@@ -293,6 +306,19 @@ footer{padding:12px 20px;font-size:11.5px;color:var(--muted);margin-top:auto}
     <div class="rng" id="lgRng">Scale from <input type="number" id="lgMin" value="0" step="0.5"> to <input type="number" id="lgMax" value="5" step="0.5"></div>
   </div>
   <div id="tip"></div>
+  <div id="compass" hidden title="Drag the arrow to point it at True North (hold Shift to snap to 15°)">
+    <svg viewBox="-60 -60 120 120" width="120" height="120" id="compSvg">
+      <circle r="54" class="ring"/>
+      <g id="compTicks"></g>
+      <g id="compArrow">
+        <path d="M0,-46 L13,8 L0,0 L-13,8 Z" class="tip"/>
+        <path d="M0,46 L13,8 L0,0 L-13,8 Z" class="tail"/>
+        <text y="-34" class="n" text-anchor="middle" dominant-baseline="middle" transform="translate(0,-18)">N</text>
+      </g>
+      <circle r="4" class="hub"/>
+    </svg>
+    <div class="comprow"><button id="compL" title="Rotate north 15° counter-clockwise">⟲ 15°</button><span id="compVal">0°</span><button id="compR" title="Rotate north 15° clockwise">15° ⟳</button></div>
+  </div>
 </main>
 </div>
 <div id="modal" class="modal" hidden>

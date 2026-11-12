@@ -42,7 +42,7 @@ function resize() {
   contourGroup.children.forEach((l) => l.material.resolution.set(r.width, r.height));
 }
 new ResizeObserver(resize).observe(view); resize();
-(function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+(function loop() { requestAnimationFrame(loop); controls.update(); updateCompass(); renderer.render(scene, camera); })();
 
 // ------------------------------------------------------------------ state
 let model = null;    // { name, layers:[{name,color,role,rho,tau,tris}], objects:[{layer, positions}] , bbox }
@@ -208,6 +208,7 @@ function buildModelMeshes() {
     modelGroup.add(mesh, edges);
   }
   model.bbox = bbox;
+  buildNorthArrow();
   styleModel();
   fitCamera('3d');
 }
@@ -310,7 +311,7 @@ function renderLayerTable() {
       <td>${rhoCell}</td><td>${tauCell}</td>`;
     const sel = tr.querySelector('select');
     const [rho, tau] = [tr.children[2].querySelector('input'), tr.children[3].querySelector('input')];
-    sel.onchange = () => { L.role = sel.value; renderLayerTable(); styleModel(); updateEstimate(); };
+    sel.onchange = () => { L.role = sel.value; renderLayerTable(); styleModel(); updateEstimate(); buildNorthArrow(); };
     if (rho) rho.onchange = () => { L.rho = rho.value; };
     if (tau) tau.onchange = () => { L.tau = parseFloat(tau.value) || 0; };
     tb.appendChild(tr);
@@ -967,6 +968,8 @@ function renderSunStats() {
   const S = result.sun, R = result.rad, M = result.sunMeta || result.radMeta;
   const where = lv ? levelName(result.levels.indexOf(lv)) : 'All levels';
   let h = `<div class="hint" style="margin:0">${escapeHtml(where)} · ${escapeHtml(M.site)} · True North ${fmtNum(M.north, 0)}° · direct sun through glazing, ${fmtInt(result.sensors.count)} points</div>`;
+  const stale = [result.sunMeta, result.radMeta].some((m) => m && Math.abs(angleDiff(m.north, getNorth())) > 0.05);
+  if (stale) h = `<div class="warn" style="margin:0 0 8px">True North is now ${fmtNum(getNorth(), 0)}°, but these results were calculated with ${fmtNum(M.north, 0)}°. Press <b>Sun hours</b> / <b>Radiation</b> again to update them.</div>` + h;
   h += '<ul class="checks">';
   if (S) {
     h = h.replace('<ul class="checks">', '') + `<div class="mini"><div><b>${fmtNum(meanOf(S.mar, idx), 1)} h</b><span>21 March</span></div><div><b>${fmtNum(meanOf(S.jun, idx), 1)} h</b><span>21 June</span></div><div><b>${fmtNum(meanOf(S.dec, idx), 1)} h</b><span>21 December</span></div><div><b>${fmtInt(meanOf(S.year, idx))} h</b><span>whole year</span></div></div><ul class="checks">`;
@@ -1161,12 +1164,12 @@ $('exRun').onclick = async () => {
     });
     const viewDir = camera.position.clone().sub(controls.target);
     const out = await renderExploded({
-      layers, sensors: result.sensors, df: M ? M.values : result.df, levels: result.levels, spacing: result.spacing, north: result.opts.north || 0,
+      layers, sensors: result.sensors, df: M ? M.values : result.df, levels: result.levels, spacing: result.spacing, north: getNorth(),
       names: result.levels.map((_, i) => levelName(i)), stats,
       ramp: exportRamp(), lines: $('exLines').checked && !sunMode ? L.map((l) => ({ df: displayMode === 'lux' ? lineDF(l) * result.eext / 100 : lineDF(l), color: l.color })) : [],
       gap: Math.max(0, parseFloat($('exGap').value) || 0), width: parseInt($('exWidth').value, 10), roof: $('exRoof').checked, slabs: $('exSlabs').checked,
       viewDir, legend: exportLegend(),
-      title: baseName(), subtitle: sunMode ? `${(result.sunMeta || result.radMeta).site} · ${U.name} · ${M.title} · True North ${fmtNum(result.opts.north || 0, 0)}°` : `${site.label} · ${U.name} · CIE overcast sky, median diffuse illuminance ${fmtInt(result.eext)} lx (EN 17037)`,
+      title: baseName(), subtitle: sunMode ? `${(result.sunMeta || result.radMeta).site} · ${U.name} · ${M.title} · True North ${fmtNum(getNorth(), 0)}°` : `${site.label} · ${U.name} · CIE overcast sky, median diffuse illuminance ${fmtInt(result.eext)} lx (EN 17037)`,
     });
     const url = URL.createObjectURL(out.blob);
     $('mImg').src = url; $('mInfo').textContent = `${out.width} × ${out.height} px`;
@@ -1177,6 +1180,112 @@ $('exRun').onclick = async () => {
     console.error(err); setStatus('export error: ' + (err.message || err));
   } finally { btn.disabled = false; btn.textContent = 'Create exploded view'; }
 };
+
+// ------------------------------------------------------------------ north arrow
+// True North = angle counter-clockwise from the model +Y axis (Ladybug convention).
+function getNorth() { return parseFloat($('north').value) || 0; }
+function angleDiff(a, b) { return ((a - b) % 360 + 540) % 360 - 180; }
+function setNorth(v) {
+  v = Math.round((((v % 360) + 540) % 360 - 180) * 10) / 10;
+  $('north').value = v;
+  onNorthChange();
+}
+function onNorthChange() {
+  buildNorthArrow();
+  $('compVal').textContent = `${fmtNum(getNorth(), getNorth() % 1 ? 1 : 0)}°`;
+  if (result && (result.sun || result.rad)) renderSunStats();
+}
+$('north').addEventListener('input', onNorthChange);
+$('compL').onclick = () => setNorth(getNorth() + 15);
+$('compR').onclick = () => setNorth(getNorth() - 15);
+
+// ticks every 30°
+$('compTicks').innerHTML = Array.from({ length: 12 }, (_, i) => { const a = i * Math.PI / 6, r0 = i % 3 ? 49 : 45; return `<line class="tick" x1="${Math.sin(a) * r0}" y1="${-Math.cos(a) * r0}" x2="${Math.sin(a) * 54}" y2="${-Math.cos(a) * 54}"/>`; }).join('');
+
+const northGroup = new THREE.Group(); scene.add(northGroup);
+function buildNorthArrow() {
+  for (const c of [...northGroup.children]) { c.geometry?.dispose(); c.material?.map?.dispose(); c.material?.dispose(); northGroup.remove(c); }
+  if (!model || model.bbox.isEmpty()) { $('compass').hidden = true; return; }
+  $('compass').hidden = false;
+  // anchor to the analysed building (slab layers), not to the whole context
+  let bb = new THREE.Box3();
+  for (const o of model.objects) {
+    if (model.layers[o.layer].role !== 'slab') continue;
+    const p = o.positions;
+    for (let i = 0; i < p.length; i += 3) bb.expandByPoint(new THREE.Vector3(p[i], p[i + 1], p[i + 2]));
+  }
+  if (bb.isEmpty()) bb = model.bbox;
+  const sz = bb.getSize(new THREE.Vector3()), span = Math.max(sz.x, sz.y, 5);
+  const L = Math.min(Math.max(span * 0.12, 2), 30);
+  const sh = new THREE.Shape();
+  sh.moveTo(0, L); sh.lineTo(L * 0.32, -L * 0.25); sh.lineTo(0, -L * 0.05); sh.lineTo(-L * 0.32, -L * 0.25); sh.closePath();
+  const arrow = new THREE.Mesh(new THREE.ShapeGeometry(sh), new THREE.MeshBasicMaterial({ color: 0xe0892b, side: THREE.DoubleSide, depthTest: false, transparent: true }));
+  arrow.renderOrder = 10;
+  const ring = new THREE.Mesh(new THREE.RingGeometry(L * 1.05, L * 1.12, 64), new THREE.MeshBasicMaterial({ color: 0x1d1f22, side: THREE.DoubleSide, depthTest: false, transparent: true }));
+  ring.renderOrder = 10;
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const ctx = cv.getContext('2d'); ctx.fillStyle = '#7a3f00'; ctx.font = '600 96px "IBM Plex Sans", Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('N', 64, 70);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  const label = new THREE.Mesh(new THREE.PlaneGeometry(L * 0.7, L * 0.7), new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide, depthTest: false, transparent: true }));
+  label.position.set(0, L * 1.45, 0); label.renderOrder = 11;
+  const rot = new THREE.Group(); rot.add(arrow, label); rot.rotation.z = getNorth() * Math.PI / 180;
+  northGroup.add(ring, rot);
+  // pick a free corner around the building (no other volume standing on it)
+  const z0 = bb.min.z, off = L * 1.7;
+  const cands = [[bb.min.x - off, bb.min.y - off], [bb.max.x + off, bb.min.y - off], [bb.min.x - off, bb.max.y + off], [bb.max.x + off, bb.max.y + off]];
+  const occupied = (x, y) => model.objects.some((o) => {
+    if (model.layers[o.layer].role === 'ignore') return false;
+    const p = o.positions;
+    for (let i = 0; i < p.length; i += 9) {
+      const zmax = Math.max(p[i + 2], p[i + 5], p[i + 8]);
+      if (zmax < z0 + 1) continue;
+      if (x < Math.min(p[i], p[i + 3], p[i + 6]) - L || x > Math.max(p[i], p[i + 3], p[i + 6]) + L) continue;
+      if (y < Math.min(p[i + 1], p[i + 4], p[i + 7]) - L || y > Math.max(p[i + 1], p[i + 4], p[i + 7]) + L) continue;
+      return true;
+    }
+    return false;
+  });
+  const free = cands.find(([x, y]) => !occupied(x, y)) || cands[0];
+  northGroup.position.set(free[0], free[1], z0 + 0.05);
+}
+
+// on-screen compass: shows north for the current view, drag to set it
+const _c0 = new THREE.Vector3(), _c1 = new THREE.Vector3();
+function screenDir(world) { // pixel vector of a unit world vector at the orbit target
+  _c0.copy(controls.target).project(camera); _c1.copy(controls.target).add(world).project(camera);
+  const r = renderer.domElement.getBoundingClientRect();
+  return [(_c1.x - _c0.x) * r.width / 2, -(_c1.y - _c0.y) * r.height / 2];
+}
+let lastCompass = '';
+function updateCompass() {
+  if ($('compass').hidden) return;
+  const th = getNorth() * Math.PI / 180;
+  const [dx, dy] = screenDir(new THREE.Vector3(-Math.sin(th), Math.cos(th), 0));
+  const ang = Math.atan2(dx, -dy) * 180 / Math.PI;
+  const key = ang.toFixed(1);
+  if (key !== lastCompass) { $('compArrow').setAttribute('transform', `rotate(${key})`); lastCompass = key; }
+}
+(function compassDrag() {
+  const svg = $('compSvg');
+  let dragging = false;
+  const fromEvent = (e) => {
+    const r = svg.getBoundingClientRect();
+    const dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+    if (Math.hypot(dx, dy) < 6) return;
+    // solve a·ex + b·ey = d for the horizontal world direction shown at this screen direction
+    const ex = screenDir(new THREE.Vector3(1, 0, 0)), ey = screenDir(new THREE.Vector3(0, 1, 0));
+    const det = ex[0] * ey[1] - ey[0] * ex[1];
+    if (Math.abs(det) < 1e-9) return;
+    const a = (dx * ey[1] - ey[0] * dy) / det, b = (ex[0] * dy - dx * ex[1]) / det;
+    let deg = Math.atan2(-a, b) * 180 / Math.PI;
+    deg = e.shiftKey ? Math.round(deg / 15) * 15 : Math.round(deg);
+    setNorth(deg);
+  };
+  svg.addEventListener('pointerdown', (e) => { dragging = true; svg.classList.add('drag'); svg.setPointerCapture(e.pointerId); fromEvent(e); e.preventDefault(); });
+  svg.addEventListener('pointermove', (e) => { if (dragging) fromEvent(e); });
+  const end = () => { dragging = false; svg.classList.remove('drag'); };
+  svg.addEventListener('pointerup', end); svg.addEventListener('pointercancel', end);
+})();
 
 // ------------------------------------------------------------------ utils
 function disposeGroup(g) {
@@ -1193,4 +1302,4 @@ function fmtDur(s) { return s < 60 ? Math.round(s) + ' s' : Math.floor(s / 60) +
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 // expose for automated tests
-window.__daylight = { get levelNames() { return levelNames; }, setUse, loadEPW, run, loadFile, get result() { return result; }, get model() { return model; }, setModel, makeDemo };
+window.__daylight = { setNorth, getNorth, get levelNames() { return levelNames; }, setUse, loadEPW, run, loadFile, get result() { return result; }, get model() { return model; }, setModel, makeDemo };
