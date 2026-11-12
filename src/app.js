@@ -1202,52 +1202,8 @@ $('compR').onclick = () => setNorth(getNorth() - 15);
 // ticks every 30°
 $('compTicks').innerHTML = Array.from({ length: 12 }, (_, i) => { const a = i * Math.PI / 6, r0 = i % 3 ? 49 : 45; return `<line class="tick" x1="${Math.sin(a) * r0}" y1="${-Math.cos(a) * r0}" x2="${Math.sin(a) * 54}" y2="${-Math.cos(a) * 54}"/>`; }).join('');
 
-const northGroup = new THREE.Group(); scene.add(northGroup);
-function buildNorthArrow() {
-  for (const c of [...northGroup.children]) { c.geometry?.dispose(); c.material?.map?.dispose(); c.material?.dispose(); northGroup.remove(c); }
-  if (!model || model.bbox.isEmpty()) { $('compass').hidden = true; return; }
-  $('compass').hidden = false;
-  // anchor to the analysed building (slab layers), not to the whole context
-  let bb = new THREE.Box3();
-  for (const o of model.objects) {
-    if (model.layers[o.layer].role !== 'slab') continue;
-    const p = o.positions;
-    for (let i = 0; i < p.length; i += 3) bb.expandByPoint(new THREE.Vector3(p[i], p[i + 1], p[i + 2]));
-  }
-  if (bb.isEmpty()) bb = model.bbox;
-  const sz = bb.getSize(new THREE.Vector3()), span = Math.max(sz.x, sz.y, 5);
-  const L = Math.min(Math.max(span * 0.12, 2), 30);
-  const sh = new THREE.Shape();
-  sh.moveTo(0, L); sh.lineTo(L * 0.32, -L * 0.25); sh.lineTo(0, -L * 0.05); sh.lineTo(-L * 0.32, -L * 0.25); sh.closePath();
-  const arrow = new THREE.Mesh(new THREE.ShapeGeometry(sh), new THREE.MeshBasicMaterial({ color: 0xe0892b, side: THREE.DoubleSide, depthTest: false, transparent: true }));
-  arrow.renderOrder = 10;
-  const ring = new THREE.Mesh(new THREE.RingGeometry(L * 1.05, L * 1.12, 64), new THREE.MeshBasicMaterial({ color: 0x1d1f22, side: THREE.DoubleSide, depthTest: false, transparent: true }));
-  ring.renderOrder = 10;
-  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
-  const ctx = cv.getContext('2d'); ctx.fillStyle = '#7a3f00'; ctx.font = '600 96px "IBM Plex Sans", Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('N', 64, 70);
-  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
-  const label = new THREE.Mesh(new THREE.PlaneGeometry(L * 0.7, L * 0.7), new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide, depthTest: false, transparent: true }));
-  label.position.set(0, L * 1.45, 0); label.renderOrder = 11;
-  const rot = new THREE.Group(); rot.add(arrow, label); rot.rotation.z = getNorth() * Math.PI / 180;
-  northGroup.add(ring, rot);
-  // pick a free corner around the building (no other volume standing on it)
-  const z0 = bb.min.z, off = L * 1.7;
-  const cands = [[bb.min.x - off, bb.min.y - off], [bb.max.x + off, bb.min.y - off], [bb.min.x - off, bb.max.y + off], [bb.max.x + off, bb.max.y + off]];
-  const occupied = (x, y) => model.objects.some((o) => {
-    if (model.layers[o.layer].role === 'ignore') return false;
-    const p = o.positions;
-    for (let i = 0; i < p.length; i += 9) {
-      const zmax = Math.max(p[i + 2], p[i + 5], p[i + 8]);
-      if (zmax < z0 + 1) continue;
-      if (x < Math.min(p[i], p[i + 3], p[i + 6]) - L || x > Math.max(p[i], p[i + 3], p[i + 6]) + L) continue;
-      if (y < Math.min(p[i + 1], p[i + 4], p[i + 7]) - L || y > Math.max(p[i + 1], p[i + 4], p[i + 7]) + L) continue;
-      return true;
-    }
-    return false;
-  });
-  const free = cands.find(([x, y]) => !occupied(x, y)) || cands[0];
-  northGroup.position.set(free[0], free[1], z0 + 0.05);
-}
+// the compass panel is shown once a model is loaded (no arrow is drawn in the 3D scene)
+function buildNorthArrow() { $('compass').hidden = !model || model.bbox.isEmpty(); }
 
 // on-screen compass: shows north for the current view, drag to set it
 const _c0 = new THREE.Vector3(), _c1 = new THREE.Vector3();
